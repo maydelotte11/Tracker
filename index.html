@@ -462,6 +462,7 @@ const DEFAULT_STATE = {
   alcStreakData: { streak: 0, lastDate: null, freeToday: false },
   weights: [],           // [ {date, value}, ... ]
   goalWeight: null,
+  apiKey: '',
   milestones: {
     weightSeen: [],        // lbs-lost milestones already celebrated, e.g. [5, 10]
     carbStreakSeen: [],    // day-count milestones already celebrated for the auto carb streak
@@ -479,6 +480,7 @@ const state = {
   alcStreak: 0, lastAlcStreakDate: null, alcoholFreeToday: false,
   weights: [],
   goalWeight: null,
+  apiKey: '',
   milestones: { weightSeen: [], carbStreakSeen: [], breakfastStreakSeen: [], alcStreakSeen: [], carbStreakBestEver: 0 }
 };
 
@@ -624,6 +626,7 @@ function applyRemoteData(data) {
   state.alcoholFreeToday = ad.lastDate === todayKey() ? !!ad.freeToday : false;
   state.weights = data.weights || [];
   state.goalWeight = (data.goalWeight === undefined) ? null : data.goalWeight;
+  state.apiKey = data.apiKey || '';
   const m = data.milestones || {};
   state.milestones = {
     weightSeen: m.weightSeen || [],
@@ -644,6 +647,14 @@ function attachUserDoc(uid) {
     return snap.data();
   }).then(data => {
     applyRemoteData(data);
+    // One-time migration: if this browser already had a key saved locally
+    // (from before syncing existed) and nothing is synced yet, carry it over.
+    const legacyKey = localStorage.getItem(LEGACY_API_KEY_STORAGE);
+    if (legacyKey && !state.apiKey) {
+      state.apiKey = legacyKey;
+      saveApiKey();
+      localStorage.removeItem(LEGACY_API_KEY_STORAGE);
+    }
     render();
     setSyncStatus('synced');
     userDocRef.onSnapshot((snap) => {
@@ -680,6 +691,7 @@ function saveAlcStreak() {
 }
 function saveWeights() { pushUpdate({ weights: state.weights }); }
 function saveGoalWeight() { pushUpdate({ goalWeight: state.goalWeight }); }
+function saveApiKey() { pushUpdate({ apiKey: state.apiKey }); }
 function saveMilestones() { pushUpdate({ milestones: state.milestones }); }
 
 /* ---------------- Date helpers ---------------- */
@@ -965,6 +977,7 @@ function render() {
   document.getElementById('carbStreakBest').textContent = carbStreaks.best;
 
   document.getElementById('goalWeightInput').value = state.goalWeight ?? '';
+  document.getElementById('apiKeyInput').value = state.apiKey || '';
 
   renderWeights();
   renderCarbChart();
@@ -982,23 +995,24 @@ function removeEntry(i) {
   render();
 }
 
-/* ---------------- Anthropic API key (stored locally, needed since this app runs standalone) ---------------- */
+/* ---------------- Anthropic API key (synced via Firestore, same as the rest of your data) ---------------- */
 
-const API_KEY_STORAGE = 'ketoLedgerAnthropicKey';
-function getApiKey() { return localStorage.getItem(API_KEY_STORAGE) || ''; }
+const LEGACY_API_KEY_STORAGE = 'ketoLedgerAnthropicKey';
 
-document.getElementById('apiKeyInput').value = getApiKey();
+function getApiKey() { return state.apiKey || ''; }
+
 document.getElementById('apiKeySaveBtn').onclick = () => {
   const v = document.getElementById('apiKeyInput').value.trim();
   const statusEl = document.getElementById('apiKeyStatus');
+  state.apiKey = v;
+  saveApiKey();
   if (v) {
-    localStorage.setItem(API_KEY_STORAGE, v);
-    statusEl.textContent = 'Saved ✓';
+    localStorage.removeItem(LEGACY_API_KEY_STORAGE); // no longer needed once synced
+    statusEl.textContent = 'Saved — synced to all devices ✓';
   } else {
-    localStorage.removeItem(API_KEY_STORAGE);
     statusEl.textContent = 'Cleared';
   }
-  setTimeout(() => { statusEl.textContent = ''; }, 2500);
+  setTimeout(() => { statusEl.textContent = ''; }, 3000);
 };
 
 document.getElementById('describeAdd').onclick = async () => {
