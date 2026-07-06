@@ -360,6 +360,13 @@
   </div>
   <div style="font-family:'Roboto Mono',monospace;font-size:10px;color:var(--ink-soft);margin-bottom:6px;" id="describeStatus">Estimates net carbs, total carbs, and cholesterol from your description. Ballpark, not lab-precise — good enough for daily tracking.</div>
 
+  <div class="budget-edit" id="apiKeyRow" style="margin-top:6px; margin-bottom:14px;">
+    <span>Claude API key:</span>
+    <input type="password" id="apiKeyInput" placeholder="sk-ant-..." style="width:180px;">
+    <button class="add-btn" id="apiKeySaveBtn" style="padding:4px 10px; font-size:10px;">SAVE</button>
+    <span id="apiKeyStatus"></span>
+  </div>
+
   <div class="subgroup-label">Or enter exact numbers manually</div>
   <div class="custom-row">
     <div class="field-block"><label>Item</label><input type="text" id="customName" placeholder="Food or drink..."></div>
@@ -975,11 +982,36 @@ function removeEntry(i) {
   render();
 }
 
+/* ---------------- Anthropic API key (stored locally, needed since this app runs standalone) ---------------- */
+
+const API_KEY_STORAGE = 'ketoLedgerAnthropicKey';
+function getApiKey() { return localStorage.getItem(API_KEY_STORAGE) || ''; }
+
+document.getElementById('apiKeyInput').value = getApiKey();
+document.getElementById('apiKeySaveBtn').onclick = () => {
+  const v = document.getElementById('apiKeyInput').value.trim();
+  const statusEl = document.getElementById('apiKeyStatus');
+  if (v) {
+    localStorage.setItem(API_KEY_STORAGE, v);
+    statusEl.textContent = 'Saved ✓';
+  } else {
+    localStorage.removeItem(API_KEY_STORAGE);
+    statusEl.textContent = 'Cleared';
+  }
+  setTimeout(() => { statusEl.textContent = ''; }, 2500);
+};
+
 document.getElementById('describeAdd').onclick = async () => {
   const desc = document.getElementById('describeInput').value.trim();
   const statusEl = document.getElementById('describeStatus');
   const btn = document.getElementById('describeAdd');
   if (!desc) return;
+
+  const apiKey = getApiKey();
+  if (!apiKey) {
+    statusEl.textContent = 'Add a Claude API key above to enable AI estimates (get one free at console.anthropic.com), or log this manually below.';
+    return;
+  }
 
   btn.disabled = true;
   btn.textContent = 'ESTIMATING...';
@@ -988,9 +1020,14 @@ document.getElementById('describeAdd').onclick = async () => {
   try {
     const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+        "anthropic-dangerous-direct-browser-access": "true"
+      },
       body: JSON.stringify({
-        model: "claude-sonnet-4-6",
+        model: "claude-haiku-4-5-20251001",
         max_tokens: 300,
         messages: [{
           role: "user",
@@ -1001,10 +1038,16 @@ Description: "${desc}"
 Respond with ONLY a JSON object, no other text, no markdown fences, in this exact shape:
 {"name": "short clean label for this entry", "net_carbs_g": number, "total_carbs_g": number, "cholesterol_mg": number, "calories_kcal": number, "note": "one short honest sentence flagging anything worth knowing, e.g. if it's likely high-carb or high-calorie for keto, or if the description was too vague to estimate well"}
 
-Be realistic and slightly conservative (round up) on carb, cholesterol, and calorie estimates for ambiguous portions, since underestimating is worse for someone tracking a strict budget.`
+Be realistic and slightly conservative (round up) on carb, cholesterol, and calorie estimates for ambiguous portions, since underestimating is worse for someone tracking a strict budget. Zero-calorie items like plain black coffee or water should get 0s across the board.`
         }]
       })
     });
+
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => ({}));
+      const msg = errBody?.error?.message || `Request failed (${response.status})`;
+      throw new Error(msg);
+    }
 
     const data = await response.json();
     const textBlock = data.content.find(b => b.type === 'text');
@@ -1024,7 +1067,7 @@ Be realistic and slightly conservative (round up) on carb, cholesterol, and calo
     statusEl.textContent = parsed.note ? `Estimate note: ${parsed.note}` : 'Logged. Estimates are ballpark — adjust manually below if you know better.';
     document.getElementById('describeInput').value = '';
   } catch (err) {
-    statusEl.textContent = 'Could not estimate that one — try rephrasing, or log it manually below.';
+    statusEl.textContent = `Couldn't estimate that one (${err.message}) — try rephrasing, check your API key, or log it manually below.`;
   } finally {
     btn.disabled = false;
     btn.textContent = 'ESTIMATE & LOG';
