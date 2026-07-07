@@ -531,8 +531,16 @@ const QUICK_WATER = [
   ["32oz bottle", 32],
 ];
 
-function todayKey() { return new Date().toISOString().slice(0,10); }
-function yesterdayKey() { return new Date(Date.now() - 86400000).toISOString().slice(0,10); }
+// All "today"/date-boundary logic is anchored to US Eastern Time (handles EST/EDT
+// automatically), regardless of the device's local timezone — so a day rolls over
+// at midnight Eastern, not midnight UTC or midnight wherever you're traveling.
+const APP_TIMEZONE = 'America/New_York';
+function todayKey() { return new Date().toLocaleDateString('en-CA', { timeZone: APP_TIMEZONE }); }
+function yesterdayKey() { return shiftDateStr(todayKey(), -1); }
+function currentEasternHour() {
+  const h = parseInt(new Date().toLocaleString('en-US', { timeZone: APP_TIMEZONE, hour: 'numeric', hour12: false }), 10);
+  return h === 24 ? 0 : h;
+}
 
 const DEFAULT_STATE = {
   budget: 25,
@@ -994,7 +1002,7 @@ function buildFeedback() {
 }
 
 function render() {
-  document.getElementById('todayLabel').textContent = new Date().toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+  document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', timeZone: APP_TIMEZONE});
   document.getElementById('budgetInput').value = state.budget;
   document.getElementById('budgetNum').textContent = state.budget;
   document.getElementById('cholTargetInput').value = state.cholTarget;
@@ -1611,7 +1619,7 @@ function checkElectrolyteReminder() {
   const banner = document.getElementById('electrolyteReminder');
   const dismissKey = `electrolyteReminderDismissed:${todayKey()}`;
   const dismissed = localStorage.getItem(dismissKey) === '1';
-  const hour = new Date().getHours();
+  const hour = currentEasternHour();
   const shouldShow = !state.electrolytesTakenToday && state.entries.length > 0 && hour >= 13 && !dismissed;
   banner.classList.toggle('show', shouldShow);
 }
