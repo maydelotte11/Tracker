@@ -295,6 +295,11 @@
     <ul id="feedbackList"><li>Log your first item and I'll tell you how the rest of the day should look.</li></ul>
   </div>
 
+  <div class="feedback-note" id="tomorrowNote" style="border-left-color: var(--sage); display:none;">
+    <span class="fb-label">Plan For Tomorrow</span>
+    <ul id="tomorrowList"></ul>
+  </div>
+
   <div class="gauges">
     <div class="gauge-section">
       <div class="gauge-top">
@@ -380,11 +385,6 @@
   </div>
 
   <div class="section-title">Hydration</div>
-  <div class="reminder-banner" id="electrolyteReminder">
-    <button class="rb-close" id="electrolyteReminderClose">✕</button>
-    <span class="rb-label">Reminder</span>
-    <p>It's afternoon and electrolytes aren't logged yet today. Worth a pinch of lite salt or your usual routine — easier to stay ahead of it than catch up once you feel it.</p>
-  </div>
   <div class="quick-grid" id="waterGrid"></div>
   <div class="custom-row">
     <div class="field-block"><label>Custom amount</label><input type="number" id="customWaterInput" min="0" placeholder="oz"></div>
@@ -401,12 +401,6 @@
       <input type="number" id="waterGoalInput" value="90" min="20" max="300" step="5">
       <span>oz</span>
     </div>
-  </div>
-  <div class="streak-box" style="margin-top:10px;">
-    <div class="streak-top">
-      <div class="streak-text" style="font-size:13px;">Electrolytes / lite salt today</div>
-    </div>
-    <button class="streak-toggle" id="electrolyteToggle">Took electrolytes today</button>
   </div>
 
   <div class="section-title">Quick Add — Food</div>
@@ -463,6 +457,7 @@
       <span id="goalProgressPct">0%</span>
     </div>
     <div class="goal-progress-track"><div class="goal-progress-fill" id="goalProgressFill" style="width:0%"></div></div>
+    <div class="chart-summary-line" id="goalProjectionLine" style="margin-top:8px; margin-bottom:0;"></div>
   </div>
   <div class="sparkline-box">
     <div class="chart-summary-line" id="weightSummaryLine"></div>
@@ -553,7 +548,6 @@ const DEFAULT_STATE = {
   water: {},             // { "2026-07-05": totalOunces }
   streakData: { streak: 0, lastDate: null, skippedToday: false },
   alcStreakData: { streak: 0, lastDate: null, freeToday: false },
-  electrolyteData: { lastDate: null, takenToday: false },
   weights: [],           // [ {date, value}, ... ]
   goalWeight: null,
   apiKey: '',
@@ -576,7 +570,6 @@ const state = {
   waterHistory: {},
   streak: 0, lastStreakDate: null, breakfastSkippedToday: false,
   alcStreak: 0, lastAlcStreakDate: null, alcoholFreeToday: false,
-  electrolytesTakenToday: false, lastElectrolyteDate: null,
   weights: [],
   goalWeight: null,
   apiKey: '',
@@ -728,9 +721,6 @@ function applyRemoteData(data) {
   state.alcStreak = ad.streak || 0;
   state.lastAlcStreakDate = ad.lastDate || null;
   state.alcoholFreeToday = ad.lastDate === todayKey() ? !!ad.freeToday : false;
-  const ed = data.electrolyteData || DEFAULT_STATE.electrolyteData;
-  state.lastElectrolyteDate = ed.lastDate || null;
-  state.electrolytesTakenToday = ed.lastDate === todayKey() ? !!ed.takenToday : false;
   state.weights = data.weights || [];
   state.goalWeight = (data.goalWeight === undefined) ? null : data.goalWeight;
   state.apiKey = data.apiKey || '';
@@ -799,9 +789,6 @@ function saveAlcStreak() {
 function saveProteinTarget() { pushUpdate({ proteinTarget: state.proteinTarget }); }
 function saveWater() { pushUpdate({ [`water.${todayKey()}`]: state.waterToday }); }
 function saveWaterGoal() { pushUpdate({ waterGoal: state.waterGoal }); }
-function saveElectrolyteData() {
-  pushUpdate({ electrolyteData: { lastDate: todayKey(), takenToday: state.electrolytesTakenToday } });
-}
 function saveWeights() { pushUpdate({ weights: state.weights }); }
 function saveGoalWeight() { pushUpdate({ goalWeight: state.goalWeight }); }
 function saveApiKey() { pushUpdate({ apiKey: state.apiKey }); }
@@ -1001,6 +988,45 @@ function buildFeedback() {
   return notes;
 }
 
+function buildTomorrowPlan() {
+  if (state.entries.length === 0) return [];
+  const t = totals();
+  const tips = [];
+
+  const netDiff = t.net - state.budget; // positive = over budget
+  if (netDiff > 15) {
+    tips.push(`You finished around ${netDiff.toFixed(0)}g over your net carb budget today. A brisk 20-30 minute bike ride or walk tomorrow — ideally before your first meal — helps burn through the extra glycogen and can speed you back into ketosis faster. It also wouldn't hurt to trim tomorrow's budget by 5-10g to balance things out over a couple of days.`);
+  } else if (netDiff > 0) {
+    tips.push(`You were ${netDiff.toFixed(0)}g over budget today — a small miss, nothing drastic needed. Just stay disciplined tomorrow and it evens out.`);
+  } else if (netDiff <= -5) {
+    tips.push(`You came in ${Math.abs(netDiff).toFixed(0)}g under budget today — solid. If that meal pattern felt sustainable, repeat it tomorrow.`);
+  }
+
+  const proteinDiff = state.proteinTarget - t.protein;
+  if (proteinDiff > 15) {
+    tips.push(`Protein finished about ${Math.round(proteinDiff)}g short of target today. Tomorrow, try adding a serving earlier in the day — like 2 eggs or a chicken breast — so it doesn't get away from you again.`);
+  } else if (proteinDiff > 0) {
+    tips.push(`Just ${Math.round(proteinDiff)}g under your protein target — close. One more small serving tomorrow closes the gap.`);
+  } else if (t.protein > 0) {
+    tips.push(`Protein target hit today — keep the same intake pattern tomorrow.`);
+  }
+
+  const calDiff = t.cal - state.calTarget;
+  if (calDiff > 200) {
+    tips.push(`Calories ran about ${Math.round(calDiff)} over target today. A slightly longer fasting window tomorrow morning, or a lighter first meal, would help bring the average back down.`);
+  }
+
+  if (state.waterToday < state.waterGoal * 0.7) {
+    tips.push(`Water finished under goal today (${state.waterToday} of ${state.waterGoal}oz). Try front-loading it tomorrow — a full glass right when you wake up sets the tone for the day.`);
+  }
+
+  if (tips.length === 0) {
+    tips.push(`Solid day across the board — carbs, protein, and calories all on target. Keep doing exactly what you did today.`);
+  }
+
+  return tips;
+}
+
 function render() {
   document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', timeZone: APP_TIMEZONE});
   document.getElementById('budgetInput').value = state.budget;
@@ -1050,6 +1076,21 @@ function render() {
     li.textContent = msg;
     fbList.appendChild(li);
   });
+
+  const tomorrowNote = document.getElementById('tomorrowNote');
+  const tomorrowList = document.getElementById('tomorrowList');
+  const tomorrowTips = buildTomorrowPlan();
+  tomorrowList.innerHTML = '';
+  if (tomorrowTips.length > 0) {
+    tomorrowNote.style.display = 'block';
+    tomorrowTips.forEach(msg => {
+      const li = document.createElement('li');
+      li.textContent = msg;
+      tomorrowList.appendChild(li);
+    });
+  } else {
+    tomorrowNote.style.display = 'none';
+  }
 
   const grid = document.getElementById('quickGrid');
   grid.innerHTML = '';
@@ -1103,11 +1144,6 @@ function render() {
   const waterFill = document.getElementById('waterFill');
   waterFill.style.width = waterPct + '%';
   waterFill.className = 'gauge-fill' + (state.waterToday >= state.waterGoal ? '' : ' warn');
-
-  const electrolyteToggle = document.getElementById('electrolyteToggle');
-  electrolyteToggle.textContent = state.electrolytesTakenToday ? '✓ Took electrolytes today' : 'Took electrolytes today';
-  electrolyteToggle.className = 'streak-toggle' + (state.electrolytesTakenToday ? ' done' : '');
-  checkElectrolyteReminder();
 
   document.getElementById('streakNum').textContent = state.streak;
   const toggle = document.getElementById('breakfastToggle');
@@ -1357,6 +1393,44 @@ document.getElementById('alcoholFreeToggle').onclick = () => {
   render();
 };
 
+function computeWeightTrendProjection() {
+  if (state.weights.length < 3 || state.goalWeight == null || state.goalWeight === '' || isNaN(state.goalWeight)) return null;
+  const pts = state.weights.slice(-30);
+  if (pts.length < 3) return null;
+
+  // Simple linear regression (least squares) over real elapsed days, so gaps
+  // between weigh-ins don't skew the trend.
+  const firstDateMs = new Date(pts[0].date + 'T00:00:00Z').getTime();
+  const xs = pts.map(p => (new Date(p.date + 'T00:00:00Z').getTime() - firstDateMs) / 86400000);
+  const ys = pts.map(p => p.value);
+  const n = xs.length;
+  const sumX = xs.reduce((a, x) => a + x, 0);
+  const sumY = ys.reduce((a, y) => a + y, 0);
+  const sumXY = xs.reduce((a, x, i) => a + x * ys[i], 0);
+  const sumXX = xs.reduce((a, x) => a + x * x, 0);
+  const denom = (n * sumXX - sumX * sumX);
+  if (denom === 0) return null;
+
+  const slope = (n * sumXY - sumX * sumY) / denom; // lbs per day (negative = losing)
+  const intercept = (sumY - slope * sumX) / n;
+  const goal = Number(state.goalWeight);
+  const currentTrendEstimate = slope * xs[xs.length - 1] + intercept;
+
+  if (currentTrendEstimate <= goal) return { reached: true };
+  if (slope >= -0.01) return { onTrack: false }; // flat or trending up
+
+  const daysToGoal = (goal - currentTrendEstimate) / slope;
+  const projectedDate = new Date();
+  projectedDate.setDate(projectedDate.getDate() + Math.round(daysToGoal));
+
+  return {
+    onTrack: true,
+    weeklyRate: Math.abs(slope * 7),
+    daysToGoal: Math.round(daysToGoal),
+    projectedDate
+  };
+}
+
 function renderGoalProgress() {
   const box = document.getElementById('goalProgressBox');
   if (state.weights.length < 2 || state.goalWeight == null || state.goalWeight === '' || isNaN(state.goalWeight)) {
@@ -1380,6 +1454,19 @@ function renderGoalProgress() {
     label.textContent = 'Goal reached!';
   } else {
     label.textContent = `${lostSoFar.toFixed(1)} of ${totalToLose.toFixed(1)} lbs to goal`;
+  }
+
+  const projLine = document.getElementById('goalProjectionLine');
+  const proj = computeWeightTrendProjection();
+  if (!proj) {
+    projLine.innerHTML = '<span>Log a few more weigh-ins to get a projected goal date.</span>';
+  } else if (proj.reached) {
+    projLine.innerHTML = '<span><strong>Trend line says you\'re already there.</strong></span>';
+  } else if (!proj.onTrack) {
+    projLine.innerHTML = '<span>Recent trend is flat — at this pace you won\'t reach your goal. A tighter carb budget or more activity would help.</span>';
+  } else {
+    const dateStr = proj.projectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    projLine.innerHTML = `<span>At your current pace (<strong>${proj.weeklyRate.toFixed(1)} lbs/week</strong>), you're projected to hit goal around <strong>${dateStr}</strong>.</span>`;
   }
 }
 
@@ -1606,27 +1693,6 @@ document.getElementById('customWaterAdd').onclick = () => {
 document.getElementById('waterGoalInput').onchange = (e) => {
   const v = parseInt(e.target.value);
   if (v > 0) { state.waterGoal = v; saveWaterGoal(); render(); }
-};
-
-document.getElementById('electrolyteToggle').onclick = () => {
-  if (state.electrolytesTakenToday) return;
-  state.electrolytesTakenToday = true;
-  saveElectrolyteData();
-  render();
-};
-
-function checkElectrolyteReminder() {
-  const banner = document.getElementById('electrolyteReminder');
-  const dismissKey = `electrolyteReminderDismissed:${todayKey()}`;
-  const dismissed = localStorage.getItem(dismissKey) === '1';
-  const hour = currentEasternHour();
-  const shouldShow = !state.electrolytesTakenToday && state.entries.length > 0 && hour >= 13 && !dismissed;
-  banner.classList.toggle('show', shouldShow);
-}
-
-document.getElementById('electrolyteReminderClose').onclick = () => {
-  localStorage.setItem(`electrolyteReminderDismissed:${todayKey()}`, '1');
-  document.getElementById('electrolyteReminder').classList.remove('show');
 };
 
 /* ---------------- Backup export / import ---------------- */
