@@ -143,7 +143,38 @@
   .celebration-banner .cb-close { position: absolute; top: 8px; right: 12px; cursor: pointer; font-family: 'Roboto Mono', monospace; color: var(--paper); background: none; border: none; font-size: 15px; opacity: 0.85; }
   .celebration-banner .cb-close:hover { opacity: 1; }
 
-  .reminder-banner {
+  .date-selector-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    background: var(--paper-dark);
+    border: 1px solid var(--rule);
+    padding: 10px 12px;
+    margin: 14px 0;
+  }
+  .date-selector-row label { font-family: 'Roboto Mono', monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 1px; color: var(--ink-soft); }
+  .date-selector-row input[type="date"] {
+    font-family: 'Roboto Mono', monospace; font-size: 12.5px; padding: 6px 8px;
+    border: 1px solid var(--rule); background: var(--paper); color: var(--ink);
+  }
+  .date-quick-btn {
+    font-family: 'Roboto Mono', monospace; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px;
+    background: var(--paper); border: 1px solid var(--rule); color: var(--ink-soft);
+    padding: 6px 10px; cursor: pointer;
+  }
+  .date-quick-btn.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .date-context-note {
+    display: none;
+    background: var(--paper-dark);
+    border: 2px solid var(--mustard);
+    padding: 10px 12px;
+    margin: 0 0 14px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 12px;
+    color: var(--ink);
+  }
+  .date-context-note.show { display: block; }
     display: none;
     background: var(--paper-dark);
     border: 2px solid var(--mustard);
@@ -284,6 +315,15 @@
     </div>
   </div>
 
+  <div class="date-selector-row">
+    <label>Logging for:</label>
+    <button class="date-quick-btn" id="dateQuickYesterday">Yesterday</button>
+    <button class="date-quick-btn" id="dateQuickToday">Today</button>
+    <button class="date-quick-btn" id="dateQuickTomorrow">Tomorrow</button>
+    <input type="date" id="logDateInput">
+  </div>
+  <div class="date-context-note" id="dateContextNote"></div>
+
   <div class="celebration-banner" id="celebrationBanner">
     <button class="cb-close" id="celebrationClose">✕</button>
     <span class="cb-label">Milestone</span>
@@ -291,12 +331,12 @@
   </div>
 
   <div class="feedback-note" id="feedbackNote">
-    <span class="fb-label">Ledger's Notes</span>
+    <span class="fb-label" id="ledgerNotesLabel">Ledger's Notes</span>
     <ul id="feedbackList"><li>Log your first item and I'll tell you how the rest of the day should look.</li></ul>
   </div>
 
   <div class="feedback-note" id="tomorrowNote" style="border-left-color: var(--sage); display:none;">
-    <span class="fb-label">Plan For Tomorrow</span>
+    <span class="fb-label" id="tomorrowNotesLabel">Plan For Tomorrow</span>
     <ul id="tomorrowList"></ul>
   </div>
 
@@ -438,7 +478,7 @@
   </div>
   <div style="font-family:'Roboto Mono',monospace;font-size:10px;color:var(--ink-soft);margin-bottom:6px;">Leave total carb blank if same as net. Leave cholesterol blank for 0.</div>
 
-  <div class="section-title">Today's Entries</div>
+  <div class="section-title" id="entriesSectionTitle">Today's Entries</div>
   <div class="ledger-list" id="ledgerList"></div>
 
   <div class="section-title">Weight Log</div>
@@ -535,6 +575,30 @@ function yesterdayKey() { return shiftDateStr(todayKey(), -1); }
 function currentEasternHour() {
   const h = parseInt(new Date().toLocaleString('en-US', { timeZone: APP_TIMEZONE, hour: 'numeric', hour12: false }), 10);
   return h === 24 ? 0 : h;
+}
+
+// Which calendar day new entries/water get filed under. Defaults to today, but the
+// person can point it at yesterday (logging something they forgot) or tomorrow
+// (planning meals ahead) — a purely local/session concern, not synced to Firestore.
+let selectedDate = todayKey();
+
+function relativeDayLabel(dateStr) {
+  if (dateStr === todayKey()) return 'Today';
+  if (dateStr === yesterdayKey()) return 'Yesterday';
+  if (dateStr === shiftDateStr(todayKey(), 1)) return 'Tomorrow';
+  return formattedDateLabel(dateStr);
+}
+
+function formattedDateLabel(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+}
+
+function setSelectedDate(dateStr) {
+  selectedDate = dateStr;
+  state.entries = state.entriesHistory[selectedDate] || [];
+  state.waterToday = state.waterHistory[selectedDate] || 0;
+  render();
 }
 
 const DEFAULT_STATE = {
@@ -691,6 +755,15 @@ function humanizeAuthError(code) {
 
 document.getElementById('signOutBtn').onclick = () => { auth.signOut(); };
 
+/* ---------------- Date selector (which day new entries/water get filed under) ---------------- */
+
+document.getElementById('dateQuickYesterday').onclick = () => setSelectedDate(yesterdayKey());
+document.getElementById('dateQuickToday').onclick = () => setSelectedDate(todayKey());
+document.getElementById('dateQuickTomorrow').onclick = () => setSelectedDate(shiftDateStr(todayKey(), 1));
+document.getElementById('logDateInput').onchange = (e) => {
+  if (e.target.value) setSelectedDate(e.target.value);
+};
+
 /* ---------------- Firestore document sync ---------------- */
 
 function setSyncStatus(mode) {
@@ -709,10 +782,10 @@ function applyRemoteData(data) {
   state.waterGoal = data.waterGoal ?? DEFAULT_STATE.waterGoal;
   const entriesMap = data.entries || {};
   state.entriesHistory = entriesMap;
-  state.entries = entriesMap[todayKey()] || [];
+  state.entries = entriesMap[selectedDate] || [];
   const waterMap = data.water || {};
   state.waterHistory = waterMap;
-  state.waterToday = waterMap[todayKey()] || 0;
+  state.waterToday = waterMap[selectedDate] || 0;
   const sd = data.streakData || DEFAULT_STATE.streakData;
   state.streak = sd.streak || 0;
   state.lastStreakDate = sd.lastDate || null;
@@ -775,7 +848,7 @@ async function pushUpdate(fields) {
   }
 }
 
-function saveEntries() { pushUpdate({ [`entries.${todayKey()}`]: state.entries }); }
+function saveEntries() { pushUpdate({ [`entries.${selectedDate}`]: state.entries }); }
 function saveBudget() { pushUpdate({ budget: state.budget }); }
 function saveCholTarget() { pushUpdate({ cholTarget: state.cholTarget }); }
 function saveTdee() { pushUpdate({ tdee: state.tdee }); }
@@ -787,7 +860,7 @@ function saveAlcStreak() {
   pushUpdate({ alcStreakData: { streak: state.alcStreak, lastDate: todayKey(), freeToday: state.alcoholFreeToday } });
 }
 function saveProteinTarget() { pushUpdate({ proteinTarget: state.proteinTarget }); }
-function saveWater() { pushUpdate({ [`water.${todayKey()}`]: state.waterToday }); }
+function saveWater() { pushUpdate({ [`water.${selectedDate}`]: state.waterToday }); }
 function saveWaterGoal() { pushUpdate({ waterGoal: state.waterGoal }); }
 function saveWeights() { pushUpdate({ weights: state.weights }); }
 function saveGoalWeight() { pushUpdate({ goalWeight: state.goalWeight }); }
@@ -810,7 +883,7 @@ function isNextCalendarDay(prevDateStr, dateStr) {
 function computeCarbStreaks() {
   const dayUnderBudget = {};
   Object.keys(state.entriesHistory).forEach(d => {
-    if (d === todayKey()) return; // skip today — not a complete day yet
+    if (d >= todayKey()) return; // skip today (incomplete) and any future/planned days
     const dayEntries = state.entriesHistory[d] || [];
     if (dayEntries.length === 0) return; // no log that day — not counted, not breaking
     const net = dayEntries.reduce((s, e) => s + e.net, 0);
@@ -941,31 +1014,37 @@ function buildFeedback() {
   const remaining = state.budget - t.net;
   const cholPct = t.chol / state.cholTarget;
   const notes = [];
+  const isToday = selectedDate === todayKey();
+  const isFuture = selectedDate > todayKey();
+  const timeframe = isToday ? 'today' : isFuture ? 'that day' : 'that day';
+  const remainderPhrase = isToday ? 'for the rest of the day' : isFuture ? 'for that whole day' : '(day already logged)';
 
   if (state.entries.length === 0) {
-    notes.push("Nothing logged yet — once you add something I'll react to it directly.");
+    notes.push(isFuture
+      ? "Nothing planned for this day yet — add some meals to see how they'd stack up."
+      : "Nothing logged yet — once you add something I'll react to it directly.");
     return notes;
   }
 
   const calRemaining = state.calTarget - t.cal;
   if (calRemaining < 0) {
-    notes.push(`${Math.abs(Math.round(calRemaining))} kcal over target today. Not a crisis on one day, but if this becomes the norm the deficit disappears — tomorrow's a cleaner shot at it.`);
+    notes.push(`${Math.abs(Math.round(calRemaining))} kcal over target ${timeframe}. Not a crisis on one day, but if this becomes the norm the deficit disappears.`);
   } else if (calRemaining < 300) {
-    notes.push(`Only ${Math.round(calRemaining)} kcal left today. Keep the rest light — protein and vegetables, not another full meal.`);
+    notes.push(`Only ${Math.round(calRemaining)} kcal of room left ${remainderPhrase}. Keep it light — protein and vegetables, not another full meal.`);
   } else {
-    notes.push(`${Math.round(calRemaining)} kcal left today (${Math.round(state.tdee - state.calTarget)} kcal deficit is the target — steady pace, nothing drastic).`);
+    notes.push(`${Math.round(calRemaining)} kcal left ${remainderPhrase} (${Math.round(state.tdee - state.calTarget)} kcal deficit is the target — steady pace, nothing drastic).`);
   }
 
   if (remaining < 0) {
-    notes.push(`You're ${Math.abs(remaining).toFixed(1)}g over your carb budget. Rest of today: protein and leafy greens only, nothing else with carbs in it.`);
+    notes.push(`You're ${Math.abs(remaining).toFixed(1)}g over your carb budget ${timeframe}. ${isToday ? 'Rest of today: protein and leafy greens only, nothing else with carbs in it.' : ''}`);
   } else if (remaining <= 5) {
-    notes.push(`Only ${remaining.toFixed(1)}g of carb room left. That's basically zero — stick to meat, eggs, and greens for the rest of the day.`);
+    notes.push(`Only ${remaining.toFixed(1)}g of carb room left ${remainderPhrase}. That's basically zero — stick to meat, eggs, and greens.`);
   } else {
-    notes.push(`${remaining.toFixed(1)}g of carb budget left for the rest of the day.`);
+    notes.push(`${remaining.toFixed(1)}g of carb budget left ${remainderPhrase}.`);
   }
 
   if (cholPct >= 1) {
-    notes.push(`Cholesterol is already at ${t.chol}mg, over your ${state.cholTarget}mg target. Skip more eggs and shellfish today — lean on chicken breast, white fish, olive oil, and nuts instead.`);
+    notes.push(`Cholesterol is already at ${t.chol}mg, over your ${state.cholTarget}mg target. ${isToday ? 'Skip more eggs and shellfish today' : 'Ease off eggs and shellfish for the rest of this day'} — lean on chicken breast, white fish, olive oil, and nuts instead.`);
   } else if (cholPct >= 0.75) {
     notes.push(`Cholesterol is at ${Math.round(cholPct*100)}% of target (${t.chol}mg). One more egg- or shrimp-heavy meal will push you over — go plant-fat or poultry for the next meal.`);
   } else if (cholPct >= 0.4) {
@@ -980,9 +1059,9 @@ function buildFeedback() {
 
   const alcEntries = state.entries.filter(e => e.isAlcohol);
   if (alcEntries.length >= 2) {
-    notes.push(`${alcEntries.length} drinks logged today. Beyond the carbs, alcohol pauses fat-burning for a few hours while your body processes it first — that's the bigger cost, not the carb count.`);
+    notes.push(`${alcEntries.length} drinks logged ${timeframe}. Beyond the carbs, alcohol pauses fat-burning for a few hours while your body processes it first — that's the bigger cost, not the carb count.`);
   } else if (alcEntries.length === 1) {
-    notes.push(`1 drink logged. If cutting back is the real goal, try alternating with sparkling water on nights you drink — makes the reduction feel less like a hard stop.`);
+    notes.push(`1 drink logged ${timeframe}. If cutting back is the real goal, try alternating with sparkling water on nights you drink — makes the reduction feel less like a hard stop.`);
   }
 
   return notes;
@@ -992,32 +1071,35 @@ function buildTomorrowPlan() {
   if (state.entries.length === 0) return [];
   const t = totals();
   const tips = [];
+  const isToday = selectedDate === todayKey();
+  const timeframe = isToday ? 'today' : 'that day';
+  const next = isToday ? 'tomorrow' : 'the next day';
 
   const netDiff = t.net - state.budget; // positive = over budget
   if (netDiff > 15) {
-    tips.push(`You finished around ${netDiff.toFixed(0)}g over your net carb budget today. A brisk 20-30 minute bike ride or walk tomorrow — ideally before your first meal — helps burn through the extra glycogen and can speed you back into ketosis faster. It also wouldn't hurt to trim tomorrow's budget by 5-10g to balance things out over a couple of days.`);
+    tips.push(`You finished around ${netDiff.toFixed(0)}g over your net carb budget ${timeframe}. A brisk 20-30 minute bike ride or walk ${next} — ideally before your first meal — helps burn through the extra glycogen and can speed you back into ketosis faster. It also wouldn't hurt to trim ${next}'s budget by 5-10g to balance things out over a couple of days.`);
   } else if (netDiff > 0) {
-    tips.push(`You were ${netDiff.toFixed(0)}g over budget today — a small miss, nothing drastic needed. Just stay disciplined tomorrow and it evens out.`);
+    tips.push(`You were ${netDiff.toFixed(0)}g over budget ${timeframe} — a small miss, nothing drastic needed. Just stay disciplined ${next} and it evens out.`);
   } else if (netDiff <= -5) {
-    tips.push(`You came in ${Math.abs(netDiff).toFixed(0)}g under budget today — solid. If that meal pattern felt sustainable, repeat it tomorrow.`);
+    tips.push(`You came in ${Math.abs(netDiff).toFixed(0)}g under budget ${timeframe} — solid. If that meal pattern felt sustainable, repeat it ${next}.`);
   }
 
   const proteinDiff = state.proteinTarget - t.protein;
   if (proteinDiff > 15) {
-    tips.push(`Protein finished about ${Math.round(proteinDiff)}g short of target today. Tomorrow, try adding a serving earlier in the day — like 2 eggs or a chicken breast — so it doesn't get away from you again.`);
+    tips.push(`Protein finished about ${Math.round(proteinDiff)}g short of target ${timeframe}. ${isToday ? 'Tomorrow' : 'The next day'}, try adding a serving earlier in the day — like 2 eggs or a chicken breast — so it doesn't get away from you again.`);
   } else if (proteinDiff > 0) {
-    tips.push(`Just ${Math.round(proteinDiff)}g under your protein target — close. One more small serving tomorrow closes the gap.`);
+    tips.push(`Just ${Math.round(proteinDiff)}g under your protein target — close. One more small serving ${next} closes the gap.`);
   } else if (t.protein > 0) {
-    tips.push(`Protein target hit today — keep the same intake pattern tomorrow.`);
+    tips.push(`Protein target hit ${timeframe} — keep the same intake pattern ${next}.`);
   }
 
   const calDiff = t.cal - state.calTarget;
   if (calDiff > 200) {
-    tips.push(`Calories ran about ${Math.round(calDiff)} over target today. A slightly longer fasting window tomorrow morning, or a lighter first meal, would help bring the average back down.`);
+    tips.push(`Calories ran about ${Math.round(calDiff)} over target ${timeframe}. A slightly longer fasting window ${next} morning, or a lighter first meal, would help bring the average back down.`);
   }
 
   if (state.waterToday < state.waterGoal * 0.7) {
-    tips.push(`Water finished under goal today (${state.waterToday} of ${state.waterGoal}oz). Try front-loading it tomorrow — a full glass right when you wake up sets the tone for the day.`);
+    tips.push(`Water finished under goal ${timeframe} (${state.waterToday} of ${state.waterGoal}oz). Try front-loading it ${next} — a full glass right when you wake up sets the tone for the day.`);
   }
 
   if (tips.length === 0) {
@@ -1029,6 +1111,28 @@ function buildTomorrowPlan() {
 
 function render() {
   document.getElementById('todayLabel').textContent = new Date().toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric', timeZone: APP_TIMEZONE});
+
+  document.getElementById('logDateInput').value = selectedDate;
+  const isToday = selectedDate === todayKey();
+  document.getElementById('dateQuickYesterday').classList.toggle('active', selectedDate === yesterdayKey());
+  document.getElementById('dateQuickToday').classList.toggle('active', isToday);
+  document.getElementById('dateQuickTomorrow').classList.toggle('active', selectedDate === shiftDateStr(todayKey(), 1));
+
+  const dayLabel = relativeDayLabel(selectedDate);
+  const dateContextNote = document.getElementById('dateContextNote');
+  if (isToday) {
+    dateContextNote.classList.remove('show');
+  } else {
+    dateContextNote.classList.add('show');
+    const isFuture = selectedDate > todayKey();
+    dateContextNote.textContent = isFuture
+      ? `Planning ahead — entries you add now go on ${dayLabel} (${formattedDateLabel(selectedDate)}), not today.`
+      : `Backfilling — entries you add now go on ${dayLabel} (${formattedDateLabel(selectedDate)}), not today.`;
+  }
+  document.getElementById('entriesSectionTitle').textContent = isToday ? "Today's Entries" : `Entries — ${dayLabel}`;
+  document.getElementById('ledgerNotesLabel').textContent = isToday ? "Ledger's Notes" : `Ledger's Notes — ${dayLabel}`;
+  document.getElementById('tomorrowNotesLabel').textContent = isToday ? 'Plan For Tomorrow' : 'Plan For The Day After';
+
   document.getElementById('budgetInput').value = state.budget;
   document.getElementById('budgetNum').textContent = state.budget;
   document.getElementById('cholTargetInput').value = state.cholTarget;
@@ -1605,7 +1709,7 @@ function renderCarbChart() {
   const days = [];
   for (let i = 13; i >= 0; i--) days.push(shiftDateStr(todayKey(), -i));
   const values = days.map(d => {
-    const entries = d === todayKey() ? state.entries : (state.entriesHistory[d] || []);
+    const entries = d === selectedDate ? state.entries : (state.entriesHistory[d] || []);
     return entries.reduce((s, e) => s + e.net, 0);
   });
 
