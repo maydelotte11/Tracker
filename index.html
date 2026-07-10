@@ -560,10 +560,10 @@ const QUICK_ALCOHOL = [
 
 // [label, ounces]
 const QUICK_WATER = [
-  ["8oz glass", 8],
-  ["16oz bottle", 16],
-  ["24oz bottle", 24],
-  ["32oz bottle", 32],
+  ["12oz", 12],
+  ["16oz", 16],
+  ["25oz", 25],
+  ["32oz", 32],
 ];
 
 // All "today"/date-boundary logic is anchored to US Eastern Time (handles EST/EDT
@@ -610,8 +610,8 @@ const DEFAULT_STATE = {
   waterGoal: 90,
   entries: {},           // { "2026-07-05": [ {name,net,total,chol,cal,protein,fat,isAlcohol}, ... ] }
   water: {},             // { "2026-07-05": totalOunces }
-  streakData: { streak: 0, lastDate: null, skippedToday: false },
-  alcStreakData: { streak: 0, lastDate: null, freeToday: false },
+  breakfastSkipDates: {},  // { "2026-07-08": true, ... } — per-day, editable via the date selector
+  alcoholFreeDates: {},    // same shape
   weights: [],           // [ {date, value}, ... ]
   goalWeight: null,
   apiKey: '',
@@ -632,8 +632,8 @@ const state = {
   entriesHistory: {},     // full { date: [entries] } map, for charts + auto streak calc
   waterToday: 0,
   waterHistory: {},
-  streak: 0, lastStreakDate: null, breakfastSkippedToday: false,
-  alcStreak: 0, lastAlcStreakDate: null, alcoholFreeToday: false,
+  breakfastSkipDates: {},
+  alcoholFreeDates: {},
   weights: [],
   goalWeight: null,
   apiKey: '',
@@ -786,14 +786,8 @@ function applyRemoteData(data) {
   const waterMap = data.water || {};
   state.waterHistory = waterMap;
   state.waterToday = waterMap[selectedDate] || 0;
-  const sd = data.streakData || DEFAULT_STATE.streakData;
-  state.streak = sd.streak || 0;
-  state.lastStreakDate = sd.lastDate || null;
-  state.breakfastSkippedToday = sd.lastDate === todayKey() ? !!sd.skippedToday : false;
-  const ad = data.alcStreakData || DEFAULT_STATE.alcStreakData;
-  state.alcStreak = ad.streak || 0;
-  state.lastAlcStreakDate = ad.lastDate || null;
-  state.alcoholFreeToday = ad.lastDate === todayKey() ? !!ad.freeToday : false;
+  state.breakfastSkipDates = data.breakfastSkipDates || {};
+  state.alcoholFreeDates = data.alcoholFreeDates || {};
   state.weights = data.weights || [];
   state.goalWeight = (data.goalWeight === undefined) ? null : data.goalWeight;
   state.apiKey = data.apiKey || '';
@@ -853,11 +847,11 @@ function saveBudget() { pushUpdate({ budget: state.budget }); }
 function saveCholTarget() { pushUpdate({ cholTarget: state.cholTarget }); }
 function saveTdee() { pushUpdate({ tdee: state.tdee }); }
 function saveCalTarget() { pushUpdate({ calTarget: state.calTarget }); }
-function saveStreak() {
-  pushUpdate({ streakData: { streak: state.streak, lastDate: todayKey(), skippedToday: state.breakfastSkippedToday } });
+function saveBreakfastSkipDates() {
+  pushUpdate({ [`breakfastSkipDates.${selectedDate}`]: !!state.breakfastSkipDates[selectedDate] });
 }
-function saveAlcStreak() {
-  pushUpdate({ alcStreakData: { streak: state.alcStreak, lastDate: todayKey(), freeToday: state.alcoholFreeToday } });
+function saveAlcoholFreeDates() {
+  pushUpdate({ [`alcoholFreeDates.${selectedDate}`]: !!state.alcoholFreeDates[selectedDate] });
 }
 function saveProteinTarget() { pushUpdate({ proteinTarget: state.proteinTarget }); }
 function saveWater() { pushUpdate({ [`water.${selectedDate}`]: state.waterToday }); }
@@ -876,6 +870,29 @@ function shiftDateStr(dateStr, deltaDays) {
 }
 function isNextCalendarDay(prevDateStr, dateStr) {
   return shiftDateStr(prevDateStr, 1) === dateStr;
+}
+
+/* ---------------- Generic streak calc for a { date: true/false } toggle map ---------------- */
+
+function computeBooleanStreak(datesMap) {
+  const trueDates = Object.keys(datesMap).filter(d => datesMap[d]).sort();
+  let best = 0, run = 0, prevDate = null;
+  trueDates.forEach(d => {
+    const consecutive = prevDate && isNextCalendarDay(prevDate, d);
+    run = consecutive ? run + 1 : 1;
+    best = Math.max(best, run);
+    prevDate = d;
+  });
+
+  // Current streak counts backward from today if today's marked, otherwise from yesterday.
+  let current = 0;
+  let checkDate = datesMap[todayKey()] ? todayKey() : yesterdayKey();
+  while (datesMap[checkDate]) {
+    current++;
+    checkDate = shiftDateStr(checkDate, -1);
+  }
+
+  return { current, best: Math.max(best, current) };
 }
 
 /* ---------------- Auto carb-budget streak (derived from real logged history) ---------------- */
@@ -951,8 +968,9 @@ function checkMilestones() {
   }
 
   // Manual breakfast-skip streak milestones
+  const breakfastStreaks = computeBooleanStreak(state.breakfastSkipDates);
   MILESTONE_DAY_THRESHOLDS.forEach(t => {
-    if (state.streak >= t && !state.milestones.breakfastStreakSeen.includes(t)) {
+    if (breakfastStreaks.current >= t && !state.milestones.breakfastStreakSeen.includes(t)) {
       newMessages.push(`${t} days skipping breakfast and staying under budget.`);
       state.milestones.breakfastStreakSeen.push(t);
       milestonesChanged = true;
@@ -960,8 +978,9 @@ function checkMilestones() {
   });
 
   // Alcohol-free streak milestones
+  const alcStreaks = computeBooleanStreak(state.alcoholFreeDates);
   MILESTONE_DAY_THRESHOLDS.forEach(t => {
-    if (state.alcStreak >= t && !state.milestones.alcStreakSeen.includes(t)) {
+    if (alcStreaks.current >= t && !state.milestones.alcStreakSeen.includes(t)) {
       newMessages.push(`${t} alcohol-free days in a row.`);
       state.milestones.alcStreakSeen.push(t);
       milestonesChanged = true;
@@ -1249,15 +1268,21 @@ function render() {
   waterFill.style.width = waterPct + '%';
   waterFill.className = 'gauge-fill' + (state.waterToday >= state.waterGoal ? '' : ' warn');
 
-  document.getElementById('streakNum').textContent = state.streak;
+  const breakfastMarked = !!state.breakfastSkipDates[selectedDate];
+  const breakfastStreaks = computeBooleanStreak(state.breakfastSkipDates);
+  document.getElementById('streakNum').textContent = breakfastStreaks.current;
   const toggle = document.getElementById('breakfastToggle');
-  toggle.textContent = state.breakfastSkippedToday ? '✓ Skipped breakfast today' : 'Skipped breakfast today';
-  toggle.className = 'streak-toggle' + (state.breakfastSkippedToday ? ' done' : '');
+  const breakfastLabel = isToday ? 'Skipped breakfast today' : 'Skipped breakfast this day';
+  toggle.textContent = breakfastMarked ? `✓ ${breakfastLabel}` : breakfastLabel;
+  toggle.className = 'streak-toggle' + (breakfastMarked ? ' done' : '');
 
-  document.getElementById('alcStreakNum').textContent = state.alcStreak;
+  const alcMarked = !!state.alcoholFreeDates[selectedDate];
+  const alcStreaks = computeBooleanStreak(state.alcoholFreeDates);
+  document.getElementById('alcStreakNum').textContent = alcStreaks.current;
   const alcToggle = document.getElementById('alcoholFreeToggle');
-  alcToggle.textContent = state.alcoholFreeToday ? '✓ Alcohol-free today' : 'Alcohol-free today';
-  alcToggle.className = 'streak-toggle' + (state.alcoholFreeToday ? ' done' : '');
+  const alcLabel = isToday ? 'Alcohol-free today' : 'Alcohol-free this day';
+  alcToggle.textContent = alcMarked ? `✓ ${alcLabel}` : alcLabel;
+  alcToggle.className = 'streak-toggle' + (alcMarked ? ' done' : '');
 
   const carbStreaks = checkMilestones();
   document.getElementById('carbStreakNum').textContent = carbStreaks.current;
@@ -1480,20 +1505,14 @@ document.getElementById('calTargetInput').onchange = (e) => {
 };
 
 document.getElementById('breakfastToggle').onclick = () => {
-  if (state.breakfastSkippedToday) return;
-  state.breakfastSkippedToday = true;
-  const wasYesterday = state.lastStreakDate === yesterdayKey();
-  state.streak = (wasYesterday || state.streak === 0) ? state.streak + 1 : 1;
-  saveStreak();
+  state.breakfastSkipDates[selectedDate] = !state.breakfastSkipDates[selectedDate];
+  saveBreakfastSkipDates();
   render();
 };
 
 document.getElementById('alcoholFreeToggle').onclick = () => {
-  if (state.alcoholFreeToday) return;
-  state.alcoholFreeToday = true;
-  const wasYesterday = state.lastAlcStreakDate === yesterdayKey();
-  state.alcStreak = (wasYesterday || state.alcStreak === 0) ? state.alcStreak + 1 : 1;
-  saveAlcStreak();
+  state.alcoholFreeDates[selectedDate] = !state.alcoholFreeDates[selectedDate];
+  saveAlcoholFreeDates();
   render();
 };
 
