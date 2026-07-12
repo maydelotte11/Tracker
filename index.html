@@ -376,6 +376,7 @@
       </div>
       <div class="gauge-track"><div class="gauge-fill" id="calFill" style="width:0%"></div></div>
       <div class="gauge-sub">Maintenance <span id="tdeeDisplay">2700</span> kcal, moderate ~500 kcal/day deficit → roughly 1lb/week.</div>
+      <div class="gauge-sub">Burned: <span id="calBurnedNum">0</span> kcal · Net: <span id="netCalNum">0</span> kcal</div>
       <div class="budget-edit">
         <span>Maintenance (TDEE):</span>
         <input type="number" id="tdeeInput" value="2700" min="1200" max="6000" step="50">
@@ -442,6 +443,14 @@
       <span>oz</span>
     </div>
   </div>
+
+  <div class="section-title">Activity — Calories Burned</div>
+  <div class="quick-grid" id="burnGrid"></div>
+  <div class="custom-row">
+    <div class="field-block"><label>Custom amount</label><input type="number" id="customBurnInput" min="0" placeholder="kcal"></div>
+    <button class="add-btn" id="customBurnAdd">ADD</button>
+  </div>
+  <div style="font-family:'Roboto Mono',monospace;font-size:10px;color:var(--ink-soft);margin-bottom:6px;">Estimates only — informational, doesn't add back to your carb or calorie budget.</div>
 
   <div class="section-title">Quick Add — Food</div>
   <div class="quick-grid" id="quickGrid"></div>
@@ -566,6 +575,16 @@ const QUICK_WATER = [
   ["32oz", 32],
 ];
 
+// [label, estimated kcal burned] — rough estimates, informational only
+const QUICK_BURN = [
+  ["20 min walk", 90],
+  ["30 min walk", 140],
+  ["20 min bike ride", 200],
+  ["30 min bike ride", 300],
+  ["30 min weight training", 150],
+  ["20 min HIIT", 250],
+];
+
 // All "today"/date-boundary logic is anchored to US Eastern Time (handles EST/EDT
 // automatically), regardless of the device's local timezone — so a day rolls over
 // at midnight Eastern, not midnight UTC or midnight wherever you're traveling.
@@ -598,6 +617,7 @@ function setSelectedDate(dateStr) {
   selectedDate = dateStr;
   state.entries = state.entriesHistory[selectedDate] || [];
   state.waterToday = state.waterHistory[selectedDate] || 0;
+  state.calBurnedToday = state.calBurnedHistory[selectedDate] || 0;
   render();
 }
 
@@ -610,6 +630,7 @@ const DEFAULT_STATE = {
   waterGoal: 90,
   entries: {},           // { "2026-07-05": [ {name,net,total,chol,cal,protein,fat,isAlcohol}, ... ] }
   water: {},             // { "2026-07-05": totalOunces }
+  calBurned: {},         // { "2026-07-05": totalKcalBurned } — informational only
   breakfastSkipDates: {},  // { "2026-07-08": true, ... } — per-day, editable via the date selector
   alcoholFreeDates: {},    // same shape
   weights: [],           // [ {date, value}, ... ]
@@ -632,6 +653,8 @@ const state = {
   entriesHistory: {},     // full { date: [entries] } map, for charts + auto streak calc
   waterToday: 0,
   waterHistory: {},
+  calBurnedToday: 0,
+  calBurnedHistory: {},
   breakfastSkipDates: {},
   alcoholFreeDates: {},
   weights: [],
@@ -786,6 +809,9 @@ function applyRemoteData(data) {
   const waterMap = data.water || {};
   state.waterHistory = waterMap;
   state.waterToday = waterMap[selectedDate] || 0;
+  const burnMap = data.calBurned || {};
+  state.calBurnedHistory = burnMap;
+  state.calBurnedToday = burnMap[selectedDate] || 0;
   state.breakfastSkipDates = data.breakfastSkipDates || {};
   state.alcoholFreeDates = data.alcoholFreeDates || {};
   state.weights = data.weights || [];
@@ -855,6 +881,7 @@ function saveAlcoholFreeDates() {
 }
 function saveProteinTarget() { pushUpdate({ proteinTarget: state.proteinTarget }); }
 function saveWater() { pushUpdate({ [`water.${selectedDate}`]: state.waterToday }); }
+function saveCalBurned() { pushUpdate({ [`calBurned.${selectedDate}`]: state.calBurnedToday }); }
 function saveWaterGoal() { pushUpdate({ waterGoal: state.waterGoal }); }
 function saveWeights() { pushUpdate({ weights: state.weights }); }
 function saveGoalWeight() { pushUpdate({ goalWeight: state.goalWeight }); }
@@ -1045,13 +1072,15 @@ function buildFeedback() {
     return notes;
   }
 
-  const calRemaining = state.calTarget - t.cal;
+  const netCal = t.cal - state.calBurnedToday;
+  const calRemaining = state.calTarget - netCal;
+  const burnNote = state.calBurnedToday > 0 ? ` (net of ${Math.round(state.calBurnedToday)} kcal burned)` : '';
   if (calRemaining < 0) {
-    notes.push(`${Math.abs(Math.round(calRemaining))} kcal over target ${timeframe}. Not a crisis on one day, but if this becomes the norm the deficit disappears.`);
+    notes.push(`${Math.abs(Math.round(calRemaining))} kcal over target ${timeframe}${burnNote}. Not a crisis on one day, but if this becomes the norm the deficit disappears.`);
   } else if (calRemaining < 300) {
-    notes.push(`Only ${Math.round(calRemaining)} kcal of room left ${remainderPhrase}. Keep it light — protein and vegetables, not another full meal.`);
+    notes.push(`Only ${Math.round(calRemaining)} kcal of room left ${remainderPhrase}${burnNote}. Keep it light — protein and vegetables, not another full meal.`);
   } else {
-    notes.push(`${Math.round(calRemaining)} kcal left ${remainderPhrase} (${Math.round(state.tdee - state.calTarget)} kcal deficit is the target — steady pace, nothing drastic).`);
+    notes.push(`${Math.round(calRemaining)} kcal left ${remainderPhrase}${burnNote} (${Math.round(state.tdee - state.calTarget)} kcal deficit is the target — steady pace, nothing drastic).`);
   }
 
   if (remaining < 0) {
@@ -1112,7 +1141,7 @@ function buildTomorrowPlan() {
     tips.push(`Protein target hit ${timeframe} — keep the same intake pattern ${next}.`);
   }
 
-  const calDiff = t.cal - state.calTarget;
+  const calDiff = (t.cal - state.calBurnedToday) - state.calTarget;
   if (calDiff > 200) {
     tips.push(`Calories ran about ${Math.round(calDiff)} over target ${timeframe}. A slightly longer fasting window ${next} morning, or a lighter first meal, would help bring the average back down.`);
   }
@@ -1167,6 +1196,8 @@ function render() {
   document.getElementById('gapNum').textContent = (t.total - t.net).toFixed(1).replace(/\.0$/,'');
   document.getElementById('cholUsedNum').textContent = Math.round(t.chol);
   document.getElementById('calUsedNum').textContent = Math.round(t.cal);
+  document.getElementById('calBurnedNum').textContent = Math.round(state.calBurnedToday);
+  document.getElementById('netCalNum').textContent = Math.round(t.cal - state.calBurnedToday);
 
   const pct = Math.min(100, (t.net / state.budget) * 100);
   const fill = document.getElementById('gaugeFill');
@@ -1178,10 +1209,11 @@ function render() {
   cholFill.style.width = cholPct + '%';
   cholFill.className = 'gauge-fill' + (t.chol > state.cholTarget ? ' over' : cholPct > 75 ? ' warn' : '');
 
-  const calPct = Math.min(100, (t.cal / state.calTarget) * 100);
+  const netCalForGauge = t.cal - state.calBurnedToday;
+  const calPct = Math.min(100, (netCalForGauge / state.calTarget) * 100);
   const calFill = document.getElementById('calFill');
   calFill.style.width = calPct + '%';
-  calFill.className = 'gauge-fill' + (t.cal > state.calTarget ? ' over' : calPct > 75 ? ' warn' : '');
+  calFill.className = 'gauge-fill' + (netCalForGauge > state.calTarget ? ' over' : calPct > 75 ? ' warn' : '');
 
   document.getElementById('proteinTargetInput').value = state.proteinTarget;
   document.getElementById('proteinTargetNum').textContent = state.proteinTarget;
@@ -1244,6 +1276,16 @@ function render() {
     btn.innerHTML = `${label}<span class="g">${oz} oz</span>`;
     btn.onclick = () => addWater(oz);
     waterGrid.appendChild(btn);
+  });
+
+  const burnGrid = document.getElementById('burnGrid');
+  burnGrid.innerHTML = '';
+  QUICK_BURN.forEach(([label, kcal]) => {
+    const btn = document.createElement('button');
+    btn.className = 'quick-btn';
+    btn.innerHTML = `${label}<span class="g">~${kcal} kcal</span>`;
+    btn.onclick = () => addCalBurned(kcal);
+    burnGrid.appendChild(btn);
   });
 
   const list = document.getElementById('ledgerList');
@@ -1816,6 +1858,19 @@ document.getElementById('customWaterAdd').onclick = () => {
 document.getElementById('waterGoalInput').onchange = (e) => {
   const v = parseInt(e.target.value);
   if (v > 0) { state.waterGoal = v; saveWaterGoal(); render(); }
+};
+
+function addCalBurned(kcal) {
+  state.calBurnedToday = Math.round(state.calBurnedToday + Number(kcal));
+  saveCalBurned();
+  render();
+}
+
+document.getElementById('customBurnAdd').onclick = () => {
+  const v = parseFloat(document.getElementById('customBurnInput').value);
+  if (isNaN(v) || v <= 0) return;
+  addCalBurned(v);
+  document.getElementById('customBurnInput').value = '';
 };
 
 /* ---------------- Backup export / import ---------------- */
