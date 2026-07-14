@@ -448,6 +448,9 @@
   </div>
   <div style="font-family:'Roboto Mono',monospace;font-size:10px;color:var(--ink-soft);margin-bottom:6px;">Enter your Garmin's total daily burn (resting + active). Update it any time — it overwrites, not adds.</div>
 
+  <div class="section-title" id="frequentFoodsTitle" style="display:none;">Your Frequent Foods</div>
+  <div class="quick-grid" id="frequentFoodsGrid"></div>
+
   <div class="section-title">Quick Add — Food</div>
   <div class="quick-grid" id="quickGrid"></div>
 
@@ -558,8 +561,6 @@ const QUICK_FOODS = [
 
 const QUICK_ALCOHOL = [
   ["Dry wine (5oz)", 4, 4, 0, 125, 0, 0],
-  ["Light beer (12oz)", 3, 3, 0, 100, 1, 0],
-  ["Regular beer (12oz)", 11, 11, 0, 150, 1, 0],
   ["Spirits, neat (1.5oz)", 0, 0, 0, 100, 0, 0],
 ];
 
@@ -1241,6 +1242,24 @@ function render() {
     tomorrowNote.style.display = 'none';
   }
 
+  const frequentFoods = computeFrequentFoods();
+  const frequentGrid = document.getElementById('frequentFoodsGrid');
+  const frequentTitle = document.getElementById('frequentFoodsTitle');
+  frequentGrid.innerHTML = '';
+  if (frequentFoods.length > 0) {
+    frequentTitle.style.display = 'flex';
+    frequentFoods.forEach(f => {
+      const btn = document.createElement('button');
+      btn.className = 'quick-btn';
+      const cholTag = f.chol >= 150 ? `<span class="chol-flag">${f.chol}mg chol ⚠</span>` : `${f.chol}mg chol`;
+      btn.innerHTML = `${f.name} <span style="color:var(--ink-soft); font-weight:400;">(×${f.count})</span><span class="g">${f.net}g net / ${f.total}g total · ${cholTag} · ${f.cal} kcal · ${f.protein}g protein</span>`;
+      btn.onclick = () => addEntry(f.name, f.net, f.total, f.chol, f.cal, f.isAlcohol, f.protein, f.fat);
+      frequentGrid.appendChild(btn);
+    });
+  } else {
+    frequentTitle.style.display = 'none';
+  }
+
   const grid = document.getElementById('quickGrid');
   grid.innerHTML = '';
   QUICK_FOODS.forEach(([name, net, total, chol, cal, protein, fat]) => {
@@ -1759,6 +1778,44 @@ function renderWeights() {
     trendPath.setAttribute('stroke-width', '2.5');
     svg.appendChild(trendPath);
   }
+}
+
+/* ---------------- Frequently logged foods (derived from real history, self-updating) ---------------- */
+
+function computeFrequentFoods() {
+  const groups = {};
+  const allDates = new Set([...Object.keys(state.entriesHistory), selectedDate]);
+  allDates.forEach(d => {
+    const dayEntries = d === selectedDate ? state.entries : (state.entriesHistory[d] || []);
+    dayEntries.forEach(e => {
+      const key = (e.name || '').trim().toLowerCase();
+      if (!key) return;
+      if (!groups[key]) {
+        groups[key] = { name: e.name, count: 0, net: 0, total: 0, chol: 0, cal: 0, protein: 0, fat: 0, isAlcohol: !!e.isAlcohol };
+      }
+      const g = groups[key];
+      g.count++;
+      g.name = e.name; // keep most recent casing
+      g.net += e.net; g.total += e.total; g.chol += e.chol; g.cal += e.cal || 0;
+      g.protein += e.protein || 0; g.fat += e.fat || 0;
+      g.isAlcohol = !!e.isAlcohol;
+    });
+  });
+
+  return Object.values(groups)
+    .filter(g => g.count >= 2)
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8)
+    .map(g => ({
+      name: g.name, count: g.count,
+      net: Math.round((g.net / g.count) * 10) / 10,
+      total: Math.round((g.total / g.count) * 10) / 10,
+      chol: Math.round(g.chol / g.count),
+      cal: Math.round(g.cal / g.count),
+      protein: Math.round(g.protein / g.count),
+      fat: Math.round(g.fat / g.count),
+      isAlcohol: g.isAlcohol
+    }));
 }
 
 function renderCarbChart() {
