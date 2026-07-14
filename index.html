@@ -371,17 +371,14 @@
 
     <div class="gauge-section">
       <div class="gauge-top">
-        <div class="gauge-label">Calories</div>
-        <div class="gauge-numbers"><span id="calUsedNum">0</span><span> / </span><span id="calTargetNum">2200</span><span> kcal</span></div>
+        <div class="gauge-label">Deficit Today</div>
+        <div class="gauge-numbers"><span id="calUsedNum">0</span><span> / </span><span id="calTargetNum">500</span><span> kcal</span></div>
       </div>
       <div class="gauge-track"><div class="gauge-fill" id="calFill" style="width:0%"></div></div>
-      <div class="gauge-sub">Maintenance <span id="tdeeDisplay">2700</span> kcal, moderate ~500 kcal/day deficit → roughly 1lb/week.</div>
-      <div class="gauge-sub">Burned: <span id="calBurnedNum">0</span> kcal · Net: <span id="netCalNum">0</span> kcal</div>
+      <div class="gauge-sub" id="calGaugeSub">Consumed: <span id="calConsumedNum">0</span> kcal · Spent (Garmin): <span id="calBurnedNum">0</span> kcal</div>
       <div class="budget-edit">
-        <span>Maintenance (TDEE):</span>
-        <input type="number" id="tdeeInput" value="2700" min="1200" max="6000" step="50">
-        <span>Target:</span>
-        <input type="number" id="calTargetInput" value="2200" min="1000" max="6000" step="50">
+        <span>Target deficit:</span>
+        <input type="number" id="targetDeficitInput" value="500" min="0" max="2000" step="50">
         <span>kcal/day</span>
       </div>
     </div>
@@ -444,13 +441,12 @@
     </div>
   </div>
 
-  <div class="section-title">Activity — Calories Burned</div>
-  <div class="quick-grid" id="burnGrid"></div>
+  <div class="section-title">Calories Spent — Garmin</div>
   <div class="custom-row">
-    <div class="field-block"><label>Custom amount</label><input type="number" id="customBurnInput" min="0" placeholder="kcal"></div>
-    <button class="add-btn" id="customBurnAdd">ADD</button>
+    <div class="field-block" style="flex:1;"><label>Total calories spent today</label><input type="number" id="garminBurnInput" min="0" placeholder="e.g. 2450"></div>
+    <button class="add-btn" id="garminBurnSave">SAVE</button>
   </div>
-  <div style="font-family:'Roboto Mono',monospace;font-size:10px;color:var(--ink-soft);margin-bottom:6px;">Estimates only — informational, doesn't add back to your carb or calorie budget.</div>
+  <div style="font-family:'Roboto Mono',monospace;font-size:10px;color:var(--ink-soft);margin-bottom:6px;">Enter your Garmin's total daily burn (resting + active). Update it any time — it overwrites, not adds.</div>
 
   <div class="section-title">Quick Add — Food</div>
   <div class="quick-grid" id="quickGrid"></div>
@@ -575,16 +571,6 @@ const QUICK_WATER = [
   ["32oz", 32],
 ];
 
-// [label, estimated kcal burned] — rough estimates, informational only
-const QUICK_BURN = [
-  ["20 min walk", 90],
-  ["30 min walk", 140],
-  ["20 min bike ride", 200],
-  ["30 min bike ride", 300],
-  ["30 min weight training", 150],
-  ["20 min HIIT", 250],
-];
-
 // All "today"/date-boundary logic is anchored to US Eastern Time (handles EST/EDT
 // automatically), regardless of the device's local timezone — so a day rolls over
 // at midnight Eastern, not midnight UTC or midnight wherever you're traveling.
@@ -624,8 +610,7 @@ function setSelectedDate(dateStr) {
 const DEFAULT_STATE = {
   budget: 25,
   cholTarget: 300,
-  tdee: 2700,
-  calTarget: 2200,
+  targetDeficit: 500,
   proteinTarget: 120,
   waterGoal: 90,
   entries: {},           // { "2026-07-05": [ {name,net,total,chol,cal,protein,fat,isAlcohol}, ... ] }
@@ -646,7 +631,7 @@ const DEFAULT_STATE = {
 };
 
 const state = {
-  budget: 25, cholTarget: 300, tdee: 2700, calTarget: 2200,
+  budget: 25, cholTarget: 300, targetDeficit: 500,
   proteinTarget: 120,
   waterGoal: 90,
   entries: [],
@@ -799,8 +784,7 @@ function setSyncStatus(mode) {
 function applyRemoteData(data) {
   state.budget = data.budget ?? DEFAULT_STATE.budget;
   state.cholTarget = data.cholTarget ?? DEFAULT_STATE.cholTarget;
-  state.tdee = data.tdee ?? DEFAULT_STATE.tdee;
-  state.calTarget = data.calTarget ?? DEFAULT_STATE.calTarget;
+  state.targetDeficit = data.targetDeficit ?? DEFAULT_STATE.targetDeficit;
   state.proteinTarget = data.proteinTarget ?? DEFAULT_STATE.proteinTarget;
   state.waterGoal = data.waterGoal ?? DEFAULT_STATE.waterGoal;
   const entriesMap = data.entries || {};
@@ -871,8 +855,7 @@ async function pushUpdate(fields) {
 function saveEntries() { pushUpdate({ [`entries.${selectedDate}`]: state.entries }); }
 function saveBudget() { pushUpdate({ budget: state.budget }); }
 function saveCholTarget() { pushUpdate({ cholTarget: state.cholTarget }); }
-function saveTdee() { pushUpdate({ tdee: state.tdee }); }
-function saveCalTarget() { pushUpdate({ calTarget: state.calTarget }); }
+function saveTargetDeficit() { pushUpdate({ targetDeficit: state.targetDeficit }); }
 function saveBreakfastSkipDates() {
   pushUpdate({ [`breakfastSkipDates.${selectedDate}`]: !!state.breakfastSkipDates[selectedDate] });
 }
@@ -1072,15 +1055,17 @@ function buildFeedback() {
     return notes;
   }
 
-  const netCal = t.cal - state.calBurnedToday;
-  const calRemaining = state.calTarget - netCal;
-  const burnNote = state.calBurnedToday > 0 ? ` (net of ${Math.round(state.calBurnedToday)} kcal burned)` : '';
-  if (calRemaining < 0) {
-    notes.push(`${Math.abs(Math.round(calRemaining))} kcal over target ${timeframe}${burnNote}. Not a crisis on one day, but if this becomes the norm the deficit disappears.`);
-  } else if (calRemaining < 300) {
-    notes.push(`Only ${Math.round(calRemaining)} kcal of room left ${remainderPhrase}${burnNote}. Keep it light — protein and vegetables, not another full meal.`);
+  if (!state.calBurnedToday) {
+    notes.push(`${Math.round(t.cal)} kcal consumed ${timeframe} — enter today's Garmin total to see your actual deficit.`);
   } else {
-    notes.push(`${Math.round(calRemaining)} kcal left ${remainderPhrase}${burnNote} (${Math.round(state.tdee - state.calTarget)} kcal deficit is the target — steady pace, nothing drastic).`);
+    const deficitToday = state.calBurnedToday - t.cal;
+    if (deficitToday <= 0) {
+      notes.push(`You're in a ${Math.abs(Math.round(deficitToday))} kcal surplus ${timeframe} (${Math.round(state.calBurnedToday)} spent vs ${Math.round(t.cal)} consumed) — over your Garmin burn. Not a crisis on one day, but worth watching if it becomes the norm.`);
+    } else if (deficitToday < state.targetDeficit) {
+      notes.push(`${Math.round(deficitToday)} kcal deficit ${timeframe} so far — short of your ${state.targetDeficit} kcal target, but still a deficit.`);
+    } else {
+      notes.push(`${Math.round(deficitToday)} kcal deficit ${timeframe} — at or past your ${state.targetDeficit} kcal target. Solid.`);
+    }
   }
 
   if (remaining < 0) {
@@ -1141,9 +1126,12 @@ function buildTomorrowPlan() {
     tips.push(`Protein target hit ${timeframe} — keep the same intake pattern ${next}.`);
   }
 
-  const calDiff = (t.cal - state.calBurnedToday) - state.calTarget;
-  if (calDiff > 200) {
-    tips.push(`Calories ran about ${Math.round(calDiff)} over target ${timeframe}. A slightly longer fasting window ${next} morning, or a lighter first meal, would help bring the average back down.`);
+  if (state.calBurnedToday) {
+    const deficitToday = state.calBurnedToday - t.cal;
+    const shortfall = state.targetDeficit - deficitToday;
+    if (shortfall > 200) {
+      tips.push(`Deficit finished about ${Math.round(shortfall)} kcal short of your ${state.targetDeficit} kcal target ${timeframe}. A slightly longer fasting window ${next} morning, or a lighter first meal, would help close that gap.`);
+    }
   }
 
   if (state.waterToday < state.waterGoal * 0.7) {
@@ -1185,19 +1173,13 @@ function render() {
   document.getElementById('budgetNum').textContent = state.budget;
   document.getElementById('cholTargetInput').value = state.cholTarget;
   document.getElementById('cholTargetNum').textContent = state.cholTarget;
-  document.getElementById('tdeeInput').value = state.tdee;
-  document.getElementById('tdeeDisplay').textContent = state.tdee;
-  document.getElementById('calTargetInput').value = state.calTarget;
-  document.getElementById('calTargetNum').textContent = state.calTarget;
+  document.getElementById('targetDeficitInput').value = state.targetDeficit;
 
   const t = totals();
   document.getElementById('usedNum').textContent = t.net.toFixed(1).replace(/\.0$/,'');
   document.getElementById('totalCarbNum').textContent = t.total.toFixed(1).replace(/\.0$/,'');
   document.getElementById('gapNum').textContent = (t.total - t.net).toFixed(1).replace(/\.0$/,'');
   document.getElementById('cholUsedNum').textContent = Math.round(t.chol);
-  document.getElementById('calUsedNum').textContent = Math.round(t.cal);
-  document.getElementById('calBurnedNum').textContent = Math.round(state.calBurnedToday);
-  document.getElementById('netCalNum').textContent = Math.round(t.cal - state.calBurnedToday);
 
   const pct = Math.min(100, (t.net / state.budget) * 100);
   const fill = document.getElementById('gaugeFill');
@@ -1209,11 +1191,23 @@ function render() {
   cholFill.style.width = cholPct + '%';
   cholFill.className = 'gauge-fill' + (t.chol > state.cholTarget ? ' over' : cholPct > 75 ? ' warn' : '');
 
-  const netCalForGauge = t.cal - state.calBurnedToday;
-  const calPct = Math.min(100, (netCalForGauge / state.calTarget) * 100);
+  document.getElementById('calTargetNum').textContent = state.targetDeficit;
   const calFill = document.getElementById('calFill');
-  calFill.style.width = calPct + '%';
-  calFill.className = 'gauge-fill' + (netCalForGauge > state.calTarget ? ' over' : calPct > 75 ? ' warn' : '');
+  const calGaugeSub = document.getElementById('calGaugeSub');
+  const calUsedNum = document.getElementById('calUsedNum');
+  if (!state.calBurnedToday) {
+    calUsedNum.textContent = '—';
+    calFill.style.width = '0%';
+    calFill.className = 'gauge-fill';
+    calGaugeSub.innerHTML = `Consumed: <span id="calConsumedNum">${Math.round(t.cal)}</span> kcal · Enter today's Garmin total below to see your deficit.`;
+  } else {
+    const deficitToday = state.calBurnedToday - t.cal;
+    calUsedNum.textContent = deficitToday;
+    const deficitPct = Math.min(100, Math.max(0, (deficitToday / state.targetDeficit) * 100));
+    calFill.style.width = deficitPct + '%';
+    calFill.className = 'gauge-fill' + (deficitToday <= 0 ? ' over' : deficitToday < state.targetDeficit ? ' warn' : '');
+    calGaugeSub.innerHTML = `Consumed: <span id="calConsumedNum">${Math.round(t.cal)}</span> kcal · Spent (Garmin): <span>${Math.round(state.calBurnedToday)}</span> kcal`;
+  }
 
   document.getElementById('proteinTargetInput').value = state.proteinTarget;
   document.getElementById('proteinTargetNum').textContent = state.proteinTarget;
@@ -1278,15 +1272,10 @@ function render() {
     waterGrid.appendChild(btn);
   });
 
-  const burnGrid = document.getElementById('burnGrid');
-  burnGrid.innerHTML = '';
-  QUICK_BURN.forEach(([label, kcal]) => {
-    const btn = document.createElement('button');
-    btn.className = 'quick-btn';
-    btn.innerHTML = `${label}<span class="g">~${kcal} kcal</span>`;
-    btn.onclick = () => addCalBurned(kcal);
-    burnGrid.appendChild(btn);
-  });
+  const burnInput = document.getElementById('garminBurnInput');
+  if (document.activeElement !== burnInput) {
+    burnInput.value = state.calBurnedToday || '';
+  }
 
   const list = document.getElementById('ledgerList');
   list.innerHTML = '';
@@ -1537,13 +1526,9 @@ document.getElementById('cholTargetInput').onchange = (e) => {
   const v = parseInt(e.target.value);
   if (v > 0) { state.cholTarget = v; saveCholTarget(); render(); }
 };
-document.getElementById('tdeeInput').onchange = (e) => {
+document.getElementById('targetDeficitInput').onchange = (e) => {
   const v = parseInt(e.target.value);
-  if (v > 0) { state.tdee = v; saveTdee(); render(); }
-};
-document.getElementById('calTargetInput').onchange = (e) => {
-  const v = parseInt(e.target.value);
-  if (v > 0) { state.calTarget = v; saveCalTarget(); render(); }
+  if (v >= 0) { state.targetDeficit = v; saveTargetDeficit(); render(); }
 };
 
 document.getElementById('breakfastToggle').onclick = () => {
@@ -1562,6 +1547,9 @@ function computeWeightTrendProjection() {
   if (state.weights.length < 3 || state.goalWeight == null || state.goalWeight === '' || isNaN(state.goalWeight)) return null;
   const pts = state.weights.slice(-30);
   if (pts.length < 3) return null;
+
+  const spanDays = (new Date(pts[pts.length - 1].date + 'T00:00:00Z') - new Date(pts[0].date + 'T00:00:00Z')) / 86400000;
+  if (spanDays < 6) return null; // too little real time elapsed to trust a trend yet
 
   // Simple linear regression (least squares) over real elapsed days, so gaps
   // between weigh-ins don't skew the trend.
@@ -1584,13 +1572,22 @@ function computeWeightTrendProjection() {
   if (currentTrendEstimate <= goal) return { reached: true };
   if (slope >= -0.01) return { onTrack: false }; // flat or trending up
 
+  const weeklyRate = Math.abs(slope * 7);
+  // A implied rate faster than this is almost never real sustained fat loss —
+  // it's much more likely a bad data point (typo, stray test entry, big early
+  // water-weight swing) than an actual trend, so don't project false confidence.
+  const PLAUSIBLE_MAX_WEEKLY_RATE = 3;
+  if (weeklyRate > PLAUSIBLE_MAX_WEEKLY_RATE) {
+    return { suspect: true, weeklyRate };
+  }
+
   const daysToGoal = (goal - currentTrendEstimate) / slope;
   const projectedDate = new Date();
   projectedDate.setDate(projectedDate.getDate() + Math.round(daysToGoal));
 
   return {
     onTrack: true,
-    weeklyRate: Math.abs(slope * 7),
+    weeklyRate,
     daysToGoal: Math.round(daysToGoal),
     projectedDate
   };
@@ -1624,9 +1621,11 @@ function renderGoalProgress() {
   const projLine = document.getElementById('goalProjectionLine');
   const proj = computeWeightTrendProjection();
   if (!proj) {
-    projLine.innerHTML = '<span>Log a few more weigh-ins to get a projected goal date.</span>';
+    projLine.innerHTML = '<span>Log a few more weigh-ins (at least a week apart) to get a projected goal date.</span>';
   } else if (proj.reached) {
     projLine.innerHTML = '<span><strong>Trend line says you\'re already there.</strong></span>';
+  } else if (proj.suspect) {
+    projLine.innerHTML = `<span>Recent trend implies ${proj.weeklyRate.toFixed(1)} lbs/week, which is faster than sustained fat loss usually goes — likely early water weight or a stray data point. Projection will stabilize with a few more weigh-ins.</span>`;
   } else if (!proj.onTrack) {
     projLine.innerHTML = '<span>Recent trend is flat — at this pace you won\'t reach your goal. A tighter carb budget or more activity would help.</span>';
   } else {
@@ -1860,18 +1859,20 @@ document.getElementById('waterGoalInput').onchange = (e) => {
   if (v > 0) { state.waterGoal = v; saveWaterGoal(); render(); }
 };
 
-function addCalBurned(kcal) {
-  state.calBurnedToday = Math.round(state.calBurnedToday + Number(kcal));
+function setGarminBurn(kcal) {
+  state.calBurnedToday = Math.round(Number(kcal));
   saveCalBurned();
   render();
 }
 
-document.getElementById('customBurnAdd').onclick = () => {
-  const v = parseFloat(document.getElementById('customBurnInput').value);
-  if (isNaN(v) || v <= 0) return;
-  addCalBurned(v);
-  document.getElementById('customBurnInput').value = '';
+document.getElementById('garminBurnSave').onclick = () => {
+  const v = parseFloat(document.getElementById('garminBurnInput').value);
+  if (isNaN(v) || v < 0) return;
+  setGarminBurn(v);
 };
+document.getElementById('garminBurnInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('garminBurnSave').click();
+});
 
 /* ---------------- Backup export / import ---------------- */
 
