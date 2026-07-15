@@ -371,14 +371,14 @@
 
     <div class="gauge-section">
       <div class="gauge-top">
-        <div class="gauge-label">Deficit Today</div>
-        <div class="gauge-numbers"><span id="calUsedNum">0</span><span> / </span><span id="calTargetNum">500</span><span> kcal</span></div>
+        <div class="gauge-label">Calories</div>
+        <div class="gauge-numbers"><span id="calUsedNum">0</span><span> / </span><span id="calTargetNum">1800</span><span> kcal</span></div>
       </div>
       <div class="gauge-track"><div class="gauge-fill" id="calFill" style="width:0%"></div></div>
-      <div class="gauge-sub" id="calGaugeSub">Consumed: <span id="calConsumedNum">0</span> kcal · Spent (Garmin): <span id="calBurnedNum">0</span> kcal</div>
+      <div class="gauge-sub" id="calGaugeSub">Spent (Garmin): <span id="calBurnedNum">0</span> kcal</div>
       <div class="budget-edit">
-        <span>Target deficit:</span>
-        <input type="number" id="targetDeficitInput" value="500" min="0" max="2000" step="50">
+        <span>Calorie target:</span>
+        <input type="number" id="calTargetInput" value="1800" min="800" max="5000" step="50">
         <span>kcal/day</span>
       </div>
     </div>
@@ -611,7 +611,7 @@ function setSelectedDate(dateStr) {
 const DEFAULT_STATE = {
   budget: 25,
   cholTarget: 300,
-  targetDeficit: 500,
+  calTarget: 1800,
   proteinTarget: 120,
   waterGoal: 90,
   entries: {},           // { "2026-07-05": [ {name,net,total,chol,cal,protein,fat,isAlcohol}, ... ] }
@@ -632,7 +632,7 @@ const DEFAULT_STATE = {
 };
 
 const state = {
-  budget: 25, cholTarget: 300, targetDeficit: 500,
+  budget: 25, cholTarget: 300, calTarget: 1800,
   proteinTarget: 120,
   waterGoal: 90,
   entries: [],
@@ -785,7 +785,7 @@ function setSyncStatus(mode) {
 function applyRemoteData(data) {
   state.budget = data.budget ?? DEFAULT_STATE.budget;
   state.cholTarget = data.cholTarget ?? DEFAULT_STATE.cholTarget;
-  state.targetDeficit = data.targetDeficit ?? DEFAULT_STATE.targetDeficit;
+  state.calTarget = data.calTarget ?? DEFAULT_STATE.calTarget;
   state.proteinTarget = data.proteinTarget ?? DEFAULT_STATE.proteinTarget;
   state.waterGoal = data.waterGoal ?? DEFAULT_STATE.waterGoal;
   const entriesMap = data.entries || {};
@@ -856,7 +856,7 @@ async function pushUpdate(fields) {
 function saveEntries() { pushUpdate({ [`entries.${selectedDate}`]: state.entries }); }
 function saveBudget() { pushUpdate({ budget: state.budget }); }
 function saveCholTarget() { pushUpdate({ cholTarget: state.cholTarget }); }
-function saveTargetDeficit() { pushUpdate({ targetDeficit: state.targetDeficit }); }
+function saveCalTarget() { pushUpdate({ calTarget: state.calTarget }); }
 function saveBreakfastSkipDates() {
   pushUpdate({ [`breakfastSkipDates.${selectedDate}`]: !!state.breakfastSkipDates[selectedDate] });
 }
@@ -1056,16 +1056,22 @@ function buildFeedback() {
     return notes;
   }
 
-  if (!state.calBurnedToday) {
-    notes.push(`${Math.round(t.cal)} kcal consumed ${timeframe} — enter today's Garmin total to see your actual deficit.`);
-  } else {
-    const deficitToday = state.calBurnedToday - t.cal;
-    if (deficitToday <= 0) {
-      notes.push(`You're in a ${Math.abs(Math.round(deficitToday))} kcal surplus ${timeframe} (${Math.round(state.calBurnedToday)} spent vs ${Math.round(t.cal)} consumed) — over your Garmin burn. Not a crisis on one day, but worth watching if it becomes the norm.`);
-    } else if (deficitToday < state.targetDeficit) {
-      notes.push(`${Math.round(deficitToday)} kcal deficit ${timeframe} so far — short of your ${state.targetDeficit} kcal target, but still a deficit.`);
+  const calOverage = t.cal - state.calTarget;
+  if (calOverage <= 0) {
+    const calRoom = Math.abs(calOverage);
+    if (calRoom < 200) {
+      notes.push(`Only ${Math.round(calRoom)} kcal of room left ${remainderPhrase} against your ${state.calTarget} target. Keep it light.`);
     } else {
-      notes.push(`${Math.round(deficitToday)} kcal deficit ${timeframe} — at or past your ${state.targetDeficit} kcal target. Solid.`);
+      notes.push(`${Math.round(calRoom)} kcal left ${remainderPhrase} against your ${state.calTarget} target.`);
+    }
+  } else if (!state.calBurnedToday) {
+    notes.push(`${Math.round(calOverage)} kcal over your ${state.calTarget} target ${timeframe}. Enter today's Garmin total to check whether activity covered it.`);
+  } else {
+    const netVsSpend = state.calBurnedToday - t.cal;
+    if (netVsSpend > 0) {
+      notes.push(`${Math.round(calOverage)} kcal over your ${state.calTarget} target ${timeframe}, but Garmin shows a ${Math.round(netVsSpend)} kcal deficit overall — looks justified by activity, not a real miss.`);
+    } else {
+      notes.push(`${Math.round(calOverage)} kcal over your ${state.calTarget} target ${timeframe}, and Garmin shows a ${Math.round(Math.abs(netVsSpend))} kcal surplus overall — this one wasn't offset by activity.`);
     }
   }
 
@@ -1127,11 +1133,11 @@ function buildTomorrowPlan() {
     tips.push(`Protein target hit ${timeframe} — keep the same intake pattern ${next}.`);
   }
 
-  if (state.calBurnedToday) {
-    const deficitToday = state.calBurnedToday - t.cal;
-    const shortfall = state.targetDeficit - deficitToday;
-    if (shortfall > 200) {
-      tips.push(`Deficit finished about ${Math.round(shortfall)} kcal short of your ${state.targetDeficit} kcal target ${timeframe}. A slightly longer fasting window ${next} morning, or a lighter first meal, would help close that gap.`);
+  const calOverageForPlan = t.cal - state.calTarget;
+  if (calOverageForPlan > 200) {
+    const justified = state.calBurnedToday && state.calBurnedToday >= t.cal;
+    if (!justified) {
+      tips.push(`Calories ran about ${Math.round(calOverageForPlan)} over your ${state.calTarget} target ${timeframe}${state.calBurnedToday ? ' without enough activity to offset it' : ''}. A slightly longer fasting window ${next} morning, or a lighter first meal, would help bring the average back down.`);
     }
   }
 
@@ -1174,7 +1180,7 @@ function render() {
   document.getElementById('budgetNum').textContent = state.budget;
   document.getElementById('cholTargetInput').value = state.cholTarget;
   document.getElementById('cholTargetNum').textContent = state.cholTarget;
-  document.getElementById('targetDeficitInput').value = state.targetDeficit;
+  document.getElementById('calTargetInput').value = state.calTarget;
 
   const t = totals();
   document.getElementById('usedNum').textContent = t.net.toFixed(1).replace(/\.0$/,'');
@@ -1192,22 +1198,28 @@ function render() {
   cholFill.style.width = cholPct + '%';
   cholFill.className = 'gauge-fill' + (t.chol > state.cholTarget ? ' over' : cholPct > 75 ? ' warn' : '');
 
-  document.getElementById('calTargetNum').textContent = state.targetDeficit;
+  document.getElementById('calTargetNum').textContent = state.calTarget;
+  document.getElementById('calUsedNum').textContent = Math.round(t.cal);
+  const calPct = Math.min(100, (t.cal / state.calTarget) * 100);
   const calFill = document.getElementById('calFill');
+  calFill.style.width = calPct + '%';
+  calFill.className = 'gauge-fill' + (t.cal > state.calTarget ? ' over' : calPct > 75 ? ' warn' : '');
+
   const calGaugeSub = document.getElementById('calGaugeSub');
-  const calUsedNum = document.getElementById('calUsedNum');
-  if (!state.calBurnedToday) {
-    calUsedNum.textContent = '—';
-    calFill.style.width = '0%';
-    calFill.className = 'gauge-fill';
-    calGaugeSub.innerHTML = `Consumed: <span id="calConsumedNum">${Math.round(t.cal)}</span> kcal · Enter today's Garmin total below to see your deficit.`;
+  const overage = t.cal - state.calTarget;
+  if (overage <= 0) {
+    calGaugeSub.innerHTML = state.calBurnedToday
+      ? `Spent (Garmin): <span>${Math.round(state.calBurnedToday)}</span> kcal — under target, no spot-check needed.`
+      : `Spent (Garmin): <span id="calBurnedNum">0</span> kcal`;
+  } else if (!state.calBurnedToday) {
+    calGaugeSub.innerHTML = `${Math.round(overage)} kcal over your ${state.calTarget} target — enter today's Garmin total below to check if activity covered it.`;
   } else {
-    const deficitToday = state.calBurnedToday - t.cal;
-    calUsedNum.textContent = deficitToday;
-    const deficitPct = Math.min(100, Math.max(0, (deficitToday / state.targetDeficit) * 100));
-    calFill.style.width = deficitPct + '%';
-    calFill.className = 'gauge-fill' + (deficitToday <= 0 ? ' over' : deficitToday < state.targetDeficit ? ' warn' : '');
-    calGaugeSub.innerHTML = `Consumed: <span id="calConsumedNum">${Math.round(t.cal)}</span> kcal · Spent (Garmin): <span>${Math.round(state.calBurnedToday)}</span> kcal`;
+    const netVsSpend = state.calBurnedToday - t.cal;
+    if (netVsSpend > 0) {
+      calGaugeSub.innerHTML = `${Math.round(overage)} kcal over target, but Garmin shows a ${Math.round(netVsSpend)} kcal deficit today overall — looks justified by activity.`;
+    } else {
+      calGaugeSub.innerHTML = `${Math.round(overage)} kcal over target, and Garmin shows a ${Math.round(Math.abs(netVsSpend))} kcal surplus today overall — this one wasn't offset by activity.`;
+    }
   }
 
   document.getElementById('proteinTargetInput').value = state.proteinTarget;
@@ -1545,9 +1557,9 @@ document.getElementById('cholTargetInput').onchange = (e) => {
   const v = parseInt(e.target.value);
   if (v > 0) { state.cholTarget = v; saveCholTarget(); render(); }
 };
-document.getElementById('targetDeficitInput').onchange = (e) => {
+document.getElementById('calTargetInput').onchange = (e) => {
   const v = parseInt(e.target.value);
-  if (v >= 0) { state.targetDeficit = v; saveTargetDeficit(); render(); }
+  if (v > 0) { state.calTarget = v; saveCalTarget(); render(); }
 };
 
 document.getElementById('breakfastToggle').onclick = () => {
