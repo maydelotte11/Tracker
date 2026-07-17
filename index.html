@@ -530,7 +530,8 @@
     <svg id="sparkline" width="100%" height="140" viewBox="0 0 560 140" preserveAspectRatio="none"></svg>
     <div class="chart-legend">
       <span><span class="legend-swatch" style="background:var(--ink);"></span>Actual weight</span>
-      <span><span class="legend-swatch" style="background:var(--sage);"></span>7-day trend</span>
+      <span><span class="legend-swatch" style="background:var(--sage);"></span>Your trend</span>
+      <span><span class="legend-swatch" style="background:var(--mustard);"></span>Expected (keto model, dashed)</span>
     </div>
     <div class="weight-log-list" id="weightList"></div>
   </div>
@@ -647,6 +648,7 @@ const DEFAULT_STATE = {
     alcStreakSeen: [],
     proteinStreakSeen: [],
     calorieStreakSeen: [],
+    goalPercentSeen: [],
     carbStreakBestEver: 0
   }
 };
@@ -666,11 +668,24 @@ const state = {
   weights: [],
   goalWeight: null,
   apiKey: '',
-  milestones: { weightSeen: [], carbStreakSeen: [], breakfastStreakSeen: [], alcStreakSeen: [], proteinStreakSeen: [], calorieStreakSeen: [], carbStreakBestEver: 0 }
+  milestones: { weightSeen: [], carbStreakSeen: [], breakfastStreakSeen: [], alcStreakSeen: [], proteinStreakSeen: [], calorieStreakSeen: [], goalPercentSeen: [], carbStreakBestEver: 0 }
 };
 
-const MILESTONE_DAY_THRESHOLDS = [3, 7, 14, 21, 30, 60, 90, 100, 180, 365];
-const MILESTONE_LB_STEP = 5;
+// Streak milestones only fire at genuinely meaningful spacing — no 3/7-day
+// "yay" moments, which get old fast and don't mean much.
+const STREAK_MILESTONE_THRESHOLDS = [30, 60, 90, 180, 365];
+// Specific, non-repeating weight-loss milestones rather than "every 5 lbs".
+const WEIGHT_LB_MILESTONES = [10, 25, 50, 75, 100, 150, 200, 250, 300];
+// Percent of the way from your starting weight to your goal weight.
+const GOAL_PERCENT_MILESTONES = [25, 50, 75, 100];
+
+function streakMilestoneMessage(days, activityPhrase) {
+  if (days >= 365) return `A full year ${activityPhrase}. That's not a diet anymore — that's just who you are now.`;
+  if (days >= 180) return `Half a year ${activityPhrase} — real, sustained consistency.`;
+  if (days >= 90) return `90 days ${activityPhrase} — three months in.`;
+  if (days >= 60) return `60 days ${activityPhrase} — this is officially a habit now, not a daily decision.`;
+  return `30 days ${activityPhrase} — a full month.`;
+}
 
 let app, auth, db, userDocRef, currentUid = null;
 let suppressNextSnapshot = false;
@@ -830,6 +845,7 @@ function applyRemoteData(data) {
     alcStreakSeen: m.alcStreakSeen || [],
     proteinStreakSeen: m.proteinStreakSeen || [],
     calorieStreakSeen: m.calorieStreakSeen || [],
+    goalPercentSeen: m.goalPercentSeen || [],
     carbStreakBestEver: m.carbStreakBestEver || 0
   };
 }
@@ -971,28 +987,48 @@ function checkMilestones() {
   const newMessages = [];
   let milestonesChanged = false;
 
-  // Weight-loss milestones — every MILESTONE_LB_STEP lbs down from the first-ever logged weight
+  // Weight-loss milestones — specific poundage markers, not "every 5 lbs"
   if (state.weights.length >= 2) {
     const startWeight = state.weights[0].value;
     const currentWeight = state.weights[state.weights.length - 1].value;
     const lost = startWeight - currentWeight;
-    if (lost > 0) {
-      const reachedStep = Math.floor(lost / MILESTONE_LB_STEP) * MILESTONE_LB_STEP;
-      for (let step = MILESTONE_LB_STEP; step <= reachedStep; step += MILESTONE_LB_STEP) {
-        if (!state.milestones.weightSeen.includes(step)) {
-          newMessages.push(`${step} lbs down from where you started — nice work.`);
-          state.milestones.weightSeen.push(step);
-          milestonesChanged = true;
-        }
+
+    WEIGHT_LB_MILESTONES.forEach(step => {
+      if (lost >= step && !state.milestones.weightSeen.includes(step)) {
+        const label = step === 10
+          ? 'First 10 lbs down — past the water weight, this is real fat loss now.'
+          : step === 100
+          ? '100 lbs lost. Triple digits.'
+          : `${step} lbs lost.`;
+        newMessages.push(label);
+        state.milestones.weightSeen.push(step);
+        milestonesChanged = true;
+      }
+    });
+
+    // Percent of the way from start to goal weight
+    if (state.goalWeight != null && state.goalWeight !== '' && !isNaN(state.goalWeight)) {
+      const goal = Number(state.goalWeight);
+      const totalToLose = startWeight - goal;
+      if (totalToLose > 0) {
+        const pctDone = (lost / totalToLose) * 100;
+        GOAL_PERCENT_MILESTONES.forEach(p => {
+          if (pctDone >= p && !state.milestones.goalPercentSeen.includes(p)) {
+            const label = p === 100 ? "You've reached your goal weight!" : `${p}% of the way to your goal weight.`;
+            newMessages.push(label);
+            state.milestones.goalPercentSeen.push(p);
+            milestonesChanged = true;
+          }
+        });
       }
     }
   }
 
   // Auto carb-budget streak milestones
   const carbStreaks = computeCarbStreaks();
-  MILESTONE_DAY_THRESHOLDS.forEach(t => {
+  STREAK_MILESTONE_THRESHOLDS.forEach(t => {
     if (carbStreaks.current >= t && !state.milestones.carbStreakSeen.includes(t)) {
-      newMessages.push(`${t} days in a row under your carb budget.`);
+      newMessages.push(streakMilestoneMessage(t, 'under your carb budget'));
       state.milestones.carbStreakSeen.push(t);
       milestonesChanged = true;
     }
@@ -1007,9 +1043,9 @@ function checkMilestones() {
 
   // Manual breakfast-skip streak milestones
   const breakfastStreaks = computeBooleanStreak(state.breakfastSkipDates);
-  MILESTONE_DAY_THRESHOLDS.forEach(t => {
+  STREAK_MILESTONE_THRESHOLDS.forEach(t => {
     if (breakfastStreaks.current >= t && !state.milestones.breakfastStreakSeen.includes(t)) {
-      newMessages.push(`${t} days skipping breakfast and staying under budget.`);
+      newMessages.push(streakMilestoneMessage(t, 'skipping breakfast'));
       state.milestones.breakfastStreakSeen.push(t);
       milestonesChanged = true;
     }
@@ -1017,9 +1053,9 @@ function checkMilestones() {
 
   // Alcohol-free streak milestones
   const alcStreaks = computeBooleanStreak(state.alcoholFreeDates);
-  MILESTONE_DAY_THRESHOLDS.forEach(t => {
+  STREAK_MILESTONE_THRESHOLDS.forEach(t => {
     if (alcStreaks.current >= t && !state.milestones.alcStreakSeen.includes(t)) {
-      newMessages.push(`${t} alcohol-free days in a row.`);
+      newMessages.push(streakMilestoneMessage(t, 'alcohol-free'));
       state.milestones.alcStreakSeen.push(t);
       milestonesChanged = true;
     }
@@ -1030,9 +1066,9 @@ function checkMilestones() {
     const protein = dayEntries.reduce((s, e) => s + (e.protein || 0), 0);
     return protein >= state.proteinTarget;
   });
-  MILESTONE_DAY_THRESHOLDS.forEach(t => {
+  STREAK_MILESTONE_THRESHOLDS.forEach(t => {
     if (proteinStreaks.current >= t && !state.milestones.proteinStreakSeen.includes(t)) {
-      newMessages.push(`${t} days in a row hitting your protein target.`);
+      newMessages.push(streakMilestoneMessage(t, 'hitting your protein target'));
       state.milestones.proteinStreakSeen.push(t);
       milestonesChanged = true;
     }
@@ -1043,9 +1079,9 @@ function checkMilestones() {
     const cal = dayEntries.reduce((s, e) => s + (e.cal || 0), 0);
     return cal <= state.calTarget;
   });
-  MILESTONE_DAY_THRESHOLDS.forEach(t => {
+  STREAK_MILESTONE_THRESHOLDS.forEach(t => {
     if (calorieStreaks.current >= t && !state.milestones.calorieStreakSeen.includes(t)) {
-      newMessages.push(`${t} days in a row under your calorie target.`);
+      newMessages.push(streakMilestoneMessage(t, 'under your calorie target'));
       state.milestones.calorieStreakSeen.push(t);
       milestonesChanged = true;
     }
@@ -1762,53 +1798,100 @@ document.getElementById('alcoholFreeToggle').onclick = () => {
   render();
 };
 
-function computeWeightTrendProjection() {
-  if (state.weights.length < 3 || state.goalWeight == null || state.goalWeight === '' || isNaN(state.goalWeight)) return null;
-  const pts = state.weights.slice(-30);
-  if (pts.length < 3) return null;
+/* ---------------- Expected keto weight-loss model ----------------
+   Grounded in the commonly-documented keto pattern: a fast initial drop
+   (1-2 weeks, mostly water/glycogen, up to ~10 lbs) followed by a much
+   steadier fat-loss rate (research generally cites ~1-2 lbs/week early,
+   settling toward ~1 lb/week after the first month). Modeled as:
 
-  const spanDays = (new Date(pts[pts.length - 1].date + 'T00:00:00Z') - new Date(pts[0].date + 'T00:00:00Z')) / 86400000;
-  if (spanDays < 6) return null; // too little real time elapsed to trust a trend yet
+     expected(t) = W0 - waterBump*(1 - e^(-t/tauWater)) - fatRate*t
 
-  // Simple linear regression (least squares) over real elapsed days, so gaps
-  // between weigh-ins don't skew the trend.
-  const firstDateMs = new Date(pts[0].date + 'T00:00:00Z').getTime();
-  const xs = pts.map(p => (new Date(p.date + 'T00:00:00Z').getTime() - firstDateMs) / 86400000);
-  const ys = pts.map(p => p.value);
-  const n = xs.length;
-  const sumX = xs.reduce((a, x) => a + x, 0);
-  const sumY = ys.reduce((a, y) => a + y, 0);
-  const sumXY = xs.reduce((a, x, i) => a + x * ys[i], 0);
-  const sumXX = xs.reduce((a, x) => a + x * x, 0);
-  const denom = (n * sumXX - sumX * sumX);
-  if (denom === 0) return null;
+   where t is days since your first logged weigh-in. The fat-loss rate is
+   estimated from your own post-water-phase data when there's enough of it,
+   falls back to your logged calorie deficit if not, and falls back to a
+   literature-typical rate if neither is available yet — so there's always
+   a projected date, never a "not enough data" dead end. The rate is kept
+   within a realistic sustainable band regardless of source, so one noisy
+   point can't produce an absurd projection either way. */
 
-  const slope = (n * sumXY - sumX * sumY) / denom; // lbs per day (negative = losing)
-  const intercept = (sumY - slope * sumX) / n;
+function computeExpectedKetoModel() {
+  if (state.weights.length < 1 || state.goalWeight == null || state.goalWeight === '' || isNaN(state.goalWeight)) return null;
+  const W0 = state.weights[0].value;
+  const startDate = state.weights[0].date;
   const goal = Number(state.goalWeight);
-  const currentTrendEstimate = slope * xs[xs.length - 1] + intercept;
+  if (W0 <= goal) return null;
 
-  if (currentTrendEstimate <= goal) return { reached: true };
-  if (slope >= -0.01) return { onTrack: false }; // flat or trending up
+  const waterBumpMax = Math.min(10, W0 * 0.02); // up to ~10 lbs, ~2% of starting weight
+  const tauWater = 7; // days — this phase typically resolves within 1-2 weeks
 
-  const weeklyRate = Math.abs(slope * 7);
-  // A implied rate faster than this is almost never real sustained fat loss —
-  // it's much more likely a bad data point (typo, stray test entry, big early
-  // water-weight swing) than an actual trend, so don't project false confidence.
-  const PLAUSIBLE_MAX_WEEKLY_RATE = 3;
-  if (weeklyRate > PLAUSIBLE_MAX_WEEKLY_RATE) {
-    return { suspect: true, weeklyRate };
+  const daysSince = d => (new Date(d + 'T00:00:00Z').getTime() - new Date(startDate + 'T00:00:00Z').getTime()) / 86400000;
+
+  let fatRate = null, basis = null;
+
+  // 1) Fit your own steady-state rate from weigh-ins after the water-weight
+  //    phase (day 14+), so the initial whoosh doesn't skew it.
+  const postAdaptPts = state.weights.filter(w => daysSince(w.date) >= 14);
+  if (postAdaptPts.length >= 2) {
+    const xs = postAdaptPts.map(p => daysSince(p.date));
+    const ys = postAdaptPts.map(p => p.value);
+    const n = xs.length;
+    const sumX = xs.reduce((a, x) => a + x, 0);
+    const sumY = ys.reduce((a, y) => a + y, 0);
+    const sumXY = xs.reduce((a, x, i) => a + x * ys[i], 0);
+    const sumXX = xs.reduce((a, x) => a + x * x, 0);
+    const denom = n * sumXX - sumX * sumX;
+    if (denom !== 0) {
+      const slope = (n * sumXY - sumX * sumY) / denom;
+      if (slope < 0) { fatRate = -slope; basis = 'trend'; }
+    }
   }
 
-  const daysToGoal = (goal - currentTrendEstimate) / slope;
-  const projectedDate = new Date();
-  projectedDate.setDate(projectedDate.getDate() + Math.round(daysToGoal));
+  // 2) Estimate from your logged calorie deficit (3500 kcal ≈ 1 lb, standard approximation)
+  if (fatRate === null) {
+    const deficitDays = [];
+    Object.keys(state.calBurnedHistory || {}).forEach(d => {
+      if (d >= todayKey()) return;
+      const spent = state.calBurnedHistory[d];
+      if (!spent) return;
+      const dayEntries = state.entriesHistory[d] || [];
+      if (dayEntries.length === 0) return;
+      const consumed = dayEntries.reduce((s, e) => s + (e.cal || 0), 0);
+      deficitDays.push(spent - consumed);
+    });
+    if (deficitDays.length >= 3) {
+      const avgDeficit = deficitDays.reduce((a, b) => a + b, 0) / deficitDays.length;
+      if (avgDeficit > 0) { fatRate = avgDeficit / 3500; basis = 'deficit'; }
+    }
+  }
+
+  // 3) Literature-typical default (~1.25 lb/week — within the commonly-cited
+  //    1-2 lb/week early, settling toward ~1 lb/week range).
+  if (fatRate === null) { fatRate = 1.25 / 7; basis = 'default'; }
+
+  const MIN_RATE = 0.5 / 7;
+  const MAX_RATE = 3 / 7;
+  const clamped = fatRate < MIN_RATE || fatRate > MAX_RATE;
+  fatRate = Math.min(MAX_RATE, Math.max(MIN_RATE, fatRate));
+
+  const expectedWeightAt = t => W0 - waterBumpMax * (1 - Math.exp(-t / tauWater)) - fatRate * t;
+
+  let lo = 0, hi = 3650;
+  for (let i = 0; i < 60; i++) {
+    const mid = (lo + hi) / 2;
+    if (expectedWeightAt(mid) > goal) lo = mid; else hi = mid;
+  }
+  const daysToGoal = (lo + hi) / 2;
+  const projectedDate = new Date(startDate + 'T00:00:00Z');
+  projectedDate.setUTCDate(projectedDate.getUTCDate() + Math.round(daysToGoal));
+
+  const elapsedSoFar = daysSince(todayKey());
+  const reached = daysToGoal <= elapsedSoFar;
 
   return {
-    onTrack: true,
-    weeklyRate,
+    W0, startDate, goal, waterBumpMax, tauWater, fatRate, basis, clamped, reached,
     daysToGoal: Math.round(daysToGoal),
-    projectedDate
+    projectedDate,
+    expectedWeightAt
   };
 }
 
@@ -1838,18 +1921,23 @@ function renderGoalProgress() {
   }
 
   const projLine = document.getElementById('goalProjectionLine');
-  const proj = computeWeightTrendProjection();
+  const proj = computeExpectedKetoModel();
   if (!proj) {
-    projLine.innerHTML = '<span>Log a few more weigh-ins (at least a week apart) to get a projected goal date.</span>';
+    projLine.innerHTML = '<span>Log your weight and a goal to get a projected date.</span>';
   } else if (proj.reached) {
-    projLine.innerHTML = '<span><strong>Trend line says you\'re already there.</strong></span>';
-  } else if (proj.suspect) {
-    projLine.innerHTML = `<span>Recent trend implies ${proj.weeklyRate.toFixed(1)} lbs/week, which is faster than sustained fat loss usually goes — likely early water weight or a stray data point. Projection will stabilize with a few more weigh-ins.</span>`;
-  } else if (!proj.onTrack) {
-    projLine.innerHTML = '<span>Recent trend is flat — at this pace you won\'t reach your goal. A tighter carb budget or more activity would help.</span>';
+    projLine.innerHTML = '<span><strong>The expected model says you should be there already.</strong> If your actual weight is still above goal, real-world plateaus are normal — small variations in adherence and water weight add up.</span>';
   } else {
     const dateStr = proj.projectedDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    projLine.innerHTML = `<span>At your current pace (<strong>${proj.weeklyRate.toFixed(1)} lbs/week</strong>), you're projected to hit goal around <strong>${dateStr}</strong>.</span>`;
+    const weeklyRate = (proj.fatRate * 7).toFixed(2);
+    let basisNote;
+    if (proj.basis === 'trend') {
+      basisNote = `based on your own logged trend after the initial water-weight phase${proj.clamped ? ' (adjusted to a realistic range)' : ''}`;
+    } else if (proj.basis === 'deficit') {
+      basisNote = `estimated from your logged average calorie deficit${proj.clamped ? ' (adjusted to a realistic range)' : ''}`;
+    } else {
+      basisNote = `using a typical keto fat-loss rate, since there isn't enough of your own data yet`;
+    }
+    projLine.innerHTML = `<span>Modeling the typical keto pattern — fast initial water-weight loss, then a steady <strong>${weeklyRate} lbs/week</strong> fat-loss rate (${basisNote}) — you're projected to hit goal around <strong>${dateStr}</strong>.</span>`;
   }
 }
 
@@ -1896,7 +1984,13 @@ function renderWeights() {
   const plotW = 560 - padLeft - padRight;
   const plotH = 140 - padTop - padBottom;
 
-  const vals = pts.map(p => p.value);
+  const expectedModel = computeExpectedKetoModel();
+  const modelStartMs = expectedModel ? new Date(expectedModel.startDate + 'T00:00:00Z').getTime() : null;
+  const expectedVals = expectedModel
+    ? pts.map(p => expectedModel.expectedWeightAt((new Date(p.date + 'T00:00:00Z').getTime() - modelStartMs) / 86400000))
+    : [];
+
+  const vals = pts.map(p => p.value).concat(expectedVals);
   let min = Math.min(...vals), max = Math.max(...vals);
   if (min === max) { min -= 1; max += 1; }
   const pad = (max - min) * 0.12 || 1;
@@ -1988,6 +2082,18 @@ function renderWeights() {
       trendPath.setAttribute('stroke-width', '2.5');
       svg.appendChild(trendPath);
     }
+  }
+
+  if (expectedModel && expectedVals.length === pts.length) {
+    const expectedCoords = pts.map((p, i) => [xFor(i), yFor(expectedVals[i])]);
+    const expectedD = expectedCoords.map((c, i) => (i === 0 ? 'M' : 'L') + c[0].toFixed(1) + ',' + c[1].toFixed(1)).join(' ');
+    const expectedPath = document.createElementNS(svgns, 'path');
+    expectedPath.setAttribute('d', expectedD);
+    expectedPath.setAttribute('fill', 'none');
+    expectedPath.setAttribute('stroke', '#B8871A');
+    expectedPath.setAttribute('stroke-width', '2');
+    expectedPath.setAttribute('stroke-dasharray', '6,4');
+    svg.appendChild(expectedPath);
   }
 }
 
